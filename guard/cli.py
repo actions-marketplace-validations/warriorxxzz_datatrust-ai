@@ -4,10 +4,15 @@ from guard.detector import scan_text
 FRIENDLY_NAMES = {
     "NP_CITIZENSHIP": "Nepal Citizenship Number",
     "NP_NID": "National ID (NID)",
-    "NP_PAN": "PAN Number",
-    "NP_PASSPORT": "Passport Number",
-    "NP_PHONE_MOBILE": "Mobile Number",
-    "NP_PHONE_LANDLINE": "Landline Number",
+    "NP_PAN": "Nepal PAN Number",
+    "NP_PASSPORT": "Nepal Passport Number",
+    "NP_PHONE_MOBILE": "Nepal Mobile Number",
+    "NP_PHONE_LANDLINE": "Nepal Landline Number",
+    "IN_AADHAAR": "India Aadhaar Number",
+    "IN_PAN": "India PAN Card",
+    "IN_UPI": "India UPI ID",
+    "IN_IFSC": "India IFSC Code",
+    "IN_PHONE_MOBILE": "India Mobile Number",
     "CREDIT_CARD": "Credit Card Number",
     "EMAIL": "Email Address",
     "IPV4": "IP Address"
@@ -44,13 +49,11 @@ def print_result(text: str):
     print("="*45 + "\n")
 
 def main():
-    # Check if the user provided text
     if len(sys.argv) < 2:
         print("Usage: datatrust \"Your text here\"")
         print("Example: datatrust \"My phone is 9841234567\"")
         return
         
-    # Join all arguments into a single string
     text = " ".join(sys.argv[1:])
     print_result(text)
 
