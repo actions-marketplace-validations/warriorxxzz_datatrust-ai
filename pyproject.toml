@@ -4,7 +4,7 @@ build-backend = "flit_core.buildapi"
 
 [project]
 name = "datatrust-privacy-guard"
-version = "0.4.2"
+version = "0.5.0"
 description = "A local PII and Secret scanner for AI chats, files, and directories."
 readme = "README.md"
 requires-python = ">=3.8"
@@ -20,6 +20,9 @@ classifiers = [
     "Operating System :: OS Independent",
     "Topic :: Security",
 ]
+
+[project.optional-dependencies]
+nlp = ["spacy>=3.0.0"]
 
 [project.urls]
 "Homepage" = "https://github.com/warriorxxzz/datatrust-ai"

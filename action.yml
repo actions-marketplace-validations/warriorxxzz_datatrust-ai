@@ -1,0 +1,5 @@
+name: 'DataTrust AI Scanner'
+description: 'Scan your code for PII and Secrets before deploying.'
+runs:
+  using: 'docker'
+  image: 'Dockerfile'
