@@ -4,11 +4,11 @@ build-backend = "flit_core.buildapi"
 
 [project]
 name = "datatrust-privacy-guard"
-version = "0.3.0"
+version = "0.4.2"
 description = "A local PII and Secret scanner for AI chats, files, and directories."
 readme = "README.md"
 requires-python = ">=3.8"
-license = {text = "MIT"}
+license = "MIT"
 authors = [
     {name = "warriorxxzz", email = "warriorxxzz8@gmail.com"}
 ]
@@ -17,7 +17,6 @@ dependencies = [
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Topic :: Security",
 ]

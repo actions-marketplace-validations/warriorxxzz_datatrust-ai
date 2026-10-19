@@ -32,6 +32,7 @@ FRIENDLY_NAMES = {
 }
 
 DEFAULT_IGNORES = ['.git', 'venv', 'env', '__pycache__', 'node_modules', 'dist', 'build', '.github']
+global_risk_found = False
 
 def load_ignore_patterns():
     patterns = set(DEFAULT_IGNORES)
@@ -44,6 +45,7 @@ def load_ignore_patterns():
     return patterns
 
 def display_result(text: str, source: str = "Input"):
+    global global_risk_found
     result = scan_text(text)
     risk = result["risk"]
     findings = result["findings"]
@@ -51,6 +53,7 @@ def display_result(text: str, source: str = "Input"):
     if risk == "NONE":
         return False
         
+    global_risk_found = True
     console.print()
     title = Text("🛑 WARNING: Sensitive Info Detected!", style="bold white on red")
     console.print(Panel(title, expand=False, border_style="red"))
@@ -80,11 +83,10 @@ def scan_file(filepath: str):
 
 def scan_directory(directory: str):
     console.print(f"[cyan]Scanning directory: {directory}...[/cyan]")
-    found_any = False
     ignores = load_ignore_patterns()
     
     for root, dirs, files in os.walk(directory):
-        dirs[:] = [d for d in dirs if d not in ignores and d not in ['.git', 'venv', 'env', '__pycache__', 'node_modules', 'dist', 'build']]
+        dirs[:] = [d for d in dirs if d not in ignores]
         
         for file in files:
             if file.endswith(('.py', '.txt', '.env', '.json', '.js', '.md', '.yaml', '.yml', '.csv')):
@@ -97,20 +99,45 @@ def scan_directory(directory: str):
                     for line_num, line in enumerate(f, 1):
                         result = scan_text(line)
                         if result["risk"] in ["HIGH", "MEDIUM"]:
-                            found_any = True
                             display_result(line, f"{filepath} (Line {line_num})")
     
-    if not found_any:
+    if not global_risk_found:
         console.print("[green]✅ Scan complete. No sensitive info found.[/green]")
 
+def install_hook():
+    hook_dir = ".git/hooks"
+    if not os.path.exists(hook_dir):
+        console.print("[red]Error: .git directory not found. Are you in a Git repository?[/red]")
+        return
+        
+    hook_path = os.path.join(hook_dir, "pre-commit")
+    hook_script = """#!/bin/sh
+echo "Running DataTrust AI scan..."
+datatrust --dir .
+if [ $? -ne 0 ]; then
+    echo "🛑 DataTrust AI blocked the commit! Remove sensitive info first."
+    exit 1
+fi
+"""
+    with open(hook_path, "w") as f:
+        f.write(hook_script)
+    os.chmod(hook_path, 0o755)
+    console.print("[green]✅ Pre-commit hook installed successfully![/green]")
+
 def main():
+    global global_risk_found
     parser = argparse.ArgumentParser(description="DataTrust AI - PII & Secret Scanner")
     parser.add_argument("text", nargs="?", help="Text to scan directly")
     parser.add_argument("--file", "-f", help="Scan a specific file")
     parser.add_argument("--dir", "-d", help="Scan an entire directory")
     parser.add_argument("--json", action="store_true", help="Output results in JSON format")
+    parser.add_argument("--install-hook", action="store_true", help="Install Git pre-commit hook")
     
     args = parser.parse_args()
+
+    if args.install_hook:
+        install_hook()
+        return
 
     if args.file:
         scan_file(args.file)
@@ -119,6 +146,8 @@ def main():
     elif args.text:
         if args.json:
             res = scan_text(args.text)
+            if res["risk"] in ["HIGH", "MEDIUM"]:
+                global_risk_found = True
             print(json.dumps(res, indent=2))
         else:
             display_result(args.text, "Direct Input")
@@ -127,6 +156,10 @@ def main():
         console.print("  datatrust \"Your text here\"")
         console.print("  datatrust --file config.py")
         console.print("  datatrust --dir ./my_project")
+        console.print("  datatrust --install-hook")
+
+    if global_risk_found:
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
