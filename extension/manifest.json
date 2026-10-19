@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "DataTrust AI",
+  "version": "1.0",
+  "description": "Warns you before sharing sensitive info with AI chats.",
+  "permissions": ["activeTab"],
+  "host_permissions": ["http://127.0.0.1:8765/*"],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*",
+        "https://gemini.google.com/*",
+        "https://claude.ai/*"
+      ],
+      "js": ["content.js"],
+      "css": ["style.css"]
+    }
+  ]
+}
