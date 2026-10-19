@@ -1,3 +1,4 @@
+import sys
 from guard.detector import scan_text
 
 FRIENDLY_NAMES = {
@@ -14,7 +15,6 @@ FRIENDLY_NAMES = {
 
 def print_result(text: str):
     result = scan_text(text)
-    
     risk = result["risk"]
     findings = result["findings"]
     
@@ -28,9 +28,7 @@ def print_result(text: str):
         
     print("🛑 WARNING: Personal Info Detected!")
     print("="*45)
-    
     print("It looks like you are about to share:\n")
-    
     
     detected_types = set()
     for item in findings:
@@ -45,6 +43,16 @@ def print_result(text: str):
     print("    removing these details before sending.")
     print("="*45 + "\n")
 
+def main():
+    # Check if the user provided text
+    if len(sys.argv) < 2:
+        print("Usage: datatrust \"Your text here\"")
+        print("Example: datatrust \"My phone is 9841234567\"")
+        return
+        
+    # Join all arguments into a single string
+    text = " ".join(sys.argv[1:])
+    print_result(text)
+
 if __name__ == "__main__":
-    sample_text = "Mero citizenship 12-01-78-12345 cha. Phone 9841234567."
-    print_result(sample_text)
+    main()
