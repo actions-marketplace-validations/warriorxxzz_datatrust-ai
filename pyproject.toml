@@ -1,17 +1,31 @@
 [build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
+requires = ["flit_core >=3.2,<4"]
+build-backend = "flit_core.buildapi"
 
 [project]
-name = "datatrust-ai"
+name = "datatrust-privacy-guard"
 version = "0.1.0"
-description = "A local PII scanner for AI chat interfaces."
+description = "A local PII scanner for AI chat interfaces. Protects privacy with Nepal/India patterns and checksum validation."
 readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "MIT"}
+authors = [
+    {name = "warriorxxzz", email = "warriorxxzz8@gmail.com"}
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Security",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/warriorxxzz/datatrust-ai"
+"Bug Tracker" = "https://github.com/warriorxxzz/datatrust-ai/issues"
 
 [project.scripts]
-datatrust = "guard.cli:main"
+datatrust = "datatrust_ai.cli:main"
 
-[tool.setuptools.packages.find]
-include = ["guard*"]
+
+[tool.flit.module]
+name = "datatrust_ai"

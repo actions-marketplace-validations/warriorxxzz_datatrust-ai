@@ -1,6 +1,6 @@
 import json
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from guard.detector import scan_text
+from datatrust_ai.detector import scan_text
 
 class RequestHandler(BaseHTTPRequestHandler):
     def do_POST(self):

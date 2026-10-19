@@ -1,5 +1,5 @@
 import sys
-from guard.detector import scan_text
+from datatrust_ai.detector import scan_text
 
 FRIENDLY_NAMES = {
     "NP_CITIZENSHIP": "Nepal Citizenship Number",

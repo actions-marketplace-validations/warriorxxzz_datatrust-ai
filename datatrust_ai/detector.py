@@ -1,9 +1,9 @@
 import re
-from guard.normalizer import normalize_digits
-from guard.patterns.nepal import NEPAL_PATTERNS
-from guard.patterns.india import INDIA_PATTERNS
-from guard.patterns.global_ids import GLOBAL_PATTERNS
-from guard.validators import is_valid_luhn, is_valid_verhoeff
+from datatrust_ai.normalizer import normalize_digits
+from datatrust_ai.patterns.nepal import NEPAL_PATTERNS
+from datatrust_ai.patterns.india import INDIA_PATTERNS
+from datatrust_ai.patterns.global_ids import GLOBAL_PATTERNS
+from datatrust_ai.validators import is_valid_luhn, is_valid_verhoeff
 
 SEVERITY = {
     # Nepal
