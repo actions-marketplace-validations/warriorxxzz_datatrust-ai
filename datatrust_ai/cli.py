@@ -14,6 +14,11 @@ FRIENDLY_NAMES = {
     "IN_IFSC": "India IFSC Code",
     "IN_PHONE_MOBILE": "India Mobile Number",
     "CREDIT_CARD": "Credit Card Number",
+    "AWS_KEY": "AWS Access Key",
+    "OPENAI_KEY": "OpenAI API Key",
+    "GITHUB_PAT": "GitHub Personal Access Token",
+    "GOOGLE_API": "Google API Key",
+    "PRIVATE_KEY": "SSH/RSA Private Key",
     "EMAIL": "Email Address",
     "IPV4": "IP Address"
 }
