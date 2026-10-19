@@ -26,6 +26,15 @@ Most existing privacy tools are either enterprise-focused or heavily bloated. Da
 - **Lightweight**: Zero heavy dependencies. Uses Python's built-in `re` module.
 - **Browser Extension**: Real-time warning banner directly inside the AI chat interface.
 
+## Challenges Faced While Building This
+
+Building a full-stack cybersecurity tool entirely from an Android phone using Termux was not easy. Here are some real challenges I solved during development:
+
+- **Mobile Development Environment**: Setting up Python, handling storage permissions (`termux-setup-storage`), and dealing with the Android file system restrictions.
+- **PyPI Publishing Issues**: Tools like `twine` and `pydantic` failed to compile because they rely on Rust, which is difficult to set up on mobile. I solved this by switching to a pure Python approach using the built-in `http.server` module and the `flit` build backend.
+- **Browser Caching**: The Lemur browser kept holding onto old cached JavaScript files, making it difficult to test the new UI. I had to learn how to force-reload unpacked extensions.
+- **Regex Overlap**: Writing regex for local IDs (like Citizenship numbers) often caused them to overlap with phone numbers. I had to implement a sorting logic in `detector.py` to keep only the longest, most accurate match.
+
 ## How to use it
 
 ### 1. Command Line Interface (CLI)
