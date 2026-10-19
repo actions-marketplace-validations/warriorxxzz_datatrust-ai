@@ -17,12 +17,18 @@ const patterns = {
     "IN_PHONE_MOBILE": /\b(?:\+91[\s-]?)?[6-9]\d{9}\b/g,
     "CREDIT_CARD": /\b(?:\d[ -]?){13,19}\b/g,
     "EMAIL": /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g,
-    "IPV4": /\b(?:\d{1,3}\.){3}\d{1,3}\b/g
+    "IPV4": /\b(?:\d{1,3}\.){3}\d{1,3}\b/g,
+    "AWS_KEY": /\bAKIA[0-9A-Z]{16}\b/g,
+    "OPENAI_KEY": /\bsk-[a-zA-Z0-9]{32,}\b/g,
+    "GITHUB_PAT": /\bghp_[a-zA-Z0-9]{36}\b/g,
+    "GOOGLE_API": /\bAIza[0-9A-Za-z\-_]{35}\b/g,
+    "PRIVATE_KEY": /-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/g
 };
 
 const severity = {
     "NP_CITIZENSHIP": "HIGH", "NP_NID": "HIGH", "NP_PAN": "HIGH", "NP_PASSPORT": "HIGH",
     "IN_AADHAAR": "HIGH", "IN_PAN": "HIGH", "CREDIT_CARD": "HIGH",
+    "AWS_KEY": "HIGH", "OPENAI_KEY": "HIGH", "GITHUB_PAT": "HIGH", "GOOGLE_API": "HIGH", "PRIVATE_KEY": "HIGH",
     "NP_PHONE_MOBILE": "MEDIUM", "IN_UPI": "MEDIUM", "IN_PHONE_MOBILE": "MEDIUM",
     "NP_PHONE_LANDLINE": "LOW", "IN_IFSC": "LOW", "EMAIL": "LOW", "IPV4": "LOW"
 };
@@ -69,8 +75,8 @@ function isVerhoeffValid(num) {
 }
 
 function maskValue(value) {
-    if (value.length <= 4) return "*".repeat(value.length);
-    return value.substring(0, 2) + "*".repeat(value.length - 4) + value.substring(value.length - 2);
+    if (value.length <= 6) return "*".repeat(value.length);
+    return value.substring(0, 3) + "*".repeat(value.length - 6) + value.substring(value.length - 3);
 }
 
 function scanText(text) {
@@ -133,9 +139,9 @@ function createWarningBox() {
             <button class="dt-close" id="dt-close-btn">&times;</button>
         </div>
         <div class="dt-body">
-            <p>We detected sensitive information in your message:</p>
+            <p>We detected sensitive information:</p>
             <ul class="dt-list" id="dt-list"></ul>
-            <p class="dt-footer">Please remove these details before sending to protect your privacy.</p>
+            <p class="dt-footer">Click "Fix" to auto-redact, or "Ignore" to hide this type.</p>
         </div>
     `;
     document.body.appendChild(warningBox);
@@ -177,20 +183,36 @@ document.addEventListener("input", (e) => {
                         <span class="dt-item-type">${friendlyType}</span>
                         <span class="dt-item-value">${maskValue(f.value)}</span>
                     </div>
-                    <button class="dt-ignore-btn" data-type="${f.type}">Ignore</button>
+                    <div class="dt-action-btns">
+                        <button class="dt-fix-btn" data-value="${f.value}">Fix</button>
+                        <button class="dt-ignore-btn" data-type="${f.type}">Ignore</button>
+                    </div>
                 `;
                 listElement.appendChild(li);
             });
 
+            document.querySelectorAll(".dt-fix-btn").forEach(btn => {
+                btn.addEventListener("click", (event) => {
+                    const valueToFix = event.target.getAttribute("data-value");
+                    if (el.value !== undefined) {
+                        el.value = el.value.replace(valueToFix, "[REDACTED]");
+                    } else {
+                        el.innerText = el.innerText.replace(valueToFix, "[REDACTED]");
+                    }
+                    lastScannedText = "";
+                    el.dispatchEvent(new Event("input"));
+                });
+            });
+
             document.querySelectorAll(".dt-ignore-btn").forEach(btn => {
-                btn.addEventListener("click", (e) => {
-                    const typeToIgnore = e.target.getAttribute("data-type");
+                btn.addEventListener("click", (event) => {
+                    const typeToIgnore = event.target.getAttribute("data-type");
                     if (!ignoredTypes.includes(typeToIgnore)) {
                         ignoredTypes.push(typeToIgnore);
                         localStorage.setItem("dt_ignored", JSON.stringify(ignoredTypes));
                     }
                     lastScannedText = "";
-                    document.dispatchEvent(new Event("input"));
+                    el.dispatchEvent(new Event("input"));
                 });
             });
 

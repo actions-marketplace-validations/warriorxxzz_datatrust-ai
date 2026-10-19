@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "DataTrust AI",
-  "version": "2.1",
-  "description": "Automated local PII scanner for 120+ AI chats.",
+  "version": "2.2",
+  "description": "Automated local PII and Secret scanner for 120+ AI chats.",
   "permissions": ["activeTab", "storage"],
   "content_scripts": [
     {
