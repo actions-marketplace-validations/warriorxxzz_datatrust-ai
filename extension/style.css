@@ -2,7 +2,7 @@
     position: fixed;
     bottom: 24px;
     right: 24px;
-    width: 340px;
+    width: 350px;
     background: #1e1e1e;
     color: #ffffff;
     border-radius: 12px;
@@ -65,13 +65,53 @@
 
 .dt-list {
     margin: 0 0 16px 0;
-    padding-left: 20px;
-    color: #ff6b81;
-    font-weight: 500;
+    padding: 0;
+    list-style: none;
 }
 
 .dt-list li {
-    margin-bottom: 4px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: #2a2a2a;
+    padding: 8px 12px;
+    border-radius: 6px;
+    margin-bottom: 8px;
+    border-left: 3px solid #ff4757;
+}
+
+.dt-item-info {
+    display: flex;
+    flex-direction: column;
+}
+
+.dt-item-type {
+    font-weight: 600;
+    color: #ff6b81;
+    font-size: 13px;
+    text-transform: uppercase;
+}
+
+.dt-item-value {
+    font-family: monospace;
+    font-size: 12px;
+    color: #bbb;
+    margin-top: 2px;
+}
+
+.dt-ignore-btn {
+    background: #444;
+    color: #fff;
+    border: none;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.dt-ignore-btn:hover {
+    background: #666;
 }
 
 .dt-footer {

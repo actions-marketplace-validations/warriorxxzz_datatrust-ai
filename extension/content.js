@@ -27,6 +27,8 @@ const severity = {
     "NP_PHONE_LANDLINE": "LOW", "IN_IFSC": "LOW", "EMAIL": "LOW", "IPV4": "LOW"
 };
 
+let ignoredTypes = JSON.parse(localStorage.getItem("dt_ignored") || "[]");
+
 function normalizeDigits(text) {
     const devanagari = "०१२३४५६७८९";
     return text.replace(/[०-९]/g, d => "0123456789"[devanagari.indexOf(d)]);
@@ -66,11 +68,18 @@ function isVerhoeffValid(num) {
     return check === 0;
 }
 
+function maskValue(value) {
+    if (value.length <= 4) return "*".repeat(value.length);
+    return value.substring(0, 2) + "*".repeat(value.length - 4) + value.substring(value.length - 2);
+}
+
 function scanText(text) {
     let normalized = normalizeDigits(text);
     let findings = [];
 
     for (let [name, regex] of Object.entries(patterns)) {
+        if (ignoredTypes.includes(name)) continue;
+        
         let match;
         regex.lastIndex = 0;
         while ((match = regex.exec(normalized)) !== null) {
@@ -80,6 +89,7 @@ function scanText(text) {
 
             findings.push({
                 type: name,
+                value: value,
                 severity: severity[name] || "LOW",
                 start: match.index,
                 end: match.index + value.length
@@ -158,12 +168,30 @@ document.addEventListener("input", (e) => {
             const listElement = document.getElementById("dt-list");
             listElement.innerHTML = ""; 
             
-            const uniqueTypes = [...new Set(data.findings.map(f => f.type.replace("NP_", "").replace("IN_", "").replace(/_/g, " ")))];
-            
-            uniqueTypes.forEach(type => {
+            data.findings.forEach(f => {
                 const li = document.createElement("li");
-                li.innerText = type;
+                const friendlyType = f.type.replace("NP_", "").replace("IN_", "").replace(/_/g, " ");
+                
+                li.innerHTML = `
+                    <div class="dt-item-info">
+                        <span class="dt-item-type">${friendlyType}</span>
+                        <span class="dt-item-value">${maskValue(f.value)}</span>
+                    </div>
+                    <button class="dt-ignore-btn" data-type="${f.type}">Ignore</button>
+                `;
                 listElement.appendChild(li);
+            });
+
+            document.querySelectorAll(".dt-ignore-btn").forEach(btn => {
+                btn.addEventListener("click", (e) => {
+                    const typeToIgnore = e.target.getAttribute("data-type");
+                    if (!ignoredTypes.includes(typeToIgnore)) {
+                        ignoredTypes.push(typeToIgnore);
+                        localStorage.setItem("dt_ignored", JSON.stringify(ignoredTypes));
+                    }
+                    lastScannedText = "";
+                    document.dispatchEvent(new Event("input"));
+                });
             });
 
             warningBox.style.display = "block";
