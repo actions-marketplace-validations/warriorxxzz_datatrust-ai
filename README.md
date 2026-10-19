@@ -1,5 +1,7 @@
 # DataTrust AI
 
+![DataTrust AI Demo](demo.jpg)
+
 A local PII (Personally Identifiable Information) scanner designed for AI chat interfaces. 
 
 It checks the text you are about to send to ChatGPT, Claude, or Gemini and warns you if it contains sensitive information like citizenship numbers, PANs, or phone numbers. Everything runs locally on your device. No data is sent to any server.
