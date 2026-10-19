@@ -3,6 +3,7 @@ from guard.normalizer import normalize_digits
 from guard.patterns.nepal import NEPAL_PATTERNS
 from guard.patterns.india import INDIA_PATTERNS
 from guard.patterns.global_ids import GLOBAL_PATTERNS
+from guard.validators import is_valid_luhn, is_valid_verhoeff
 
 SEVERITY = {
     # Nepal
@@ -33,6 +34,16 @@ def scan_text(text: str) -> dict:
     # 1. Run all patterns
     for name, pattern in ALL_PATTERNS.items():
         for match in re.finditer(pattern, normalized):
+            value = match.group()
+            
+            # --- CHECKSUM VALIDATION ---
+            if name == "CREDIT_CARD" and not is_valid_luhn(value):
+                continue # Skip fake credit cards
+                
+            if name == "IN_AADHAAR" and not is_valid_verhoeff(value):
+                continue # Skip fake Aadhaar numbers
+            # ---------------------------
+
             findings.append({
                 "type": name,
                 "severity": SEVERITY.get(name, "LOW"),
@@ -40,7 +51,7 @@ def scan_text(text: str) -> dict:
                 "end": match.end(),
             })
 
-    # 2. Fix overlapping matches (e.g., keep the longest match)
+    # 2. Fix overlapping matches (keep the longest match)
     findings.sort(key=lambda x: (x["end"] - x["start"]), reverse=True)
     
     filtered = []
