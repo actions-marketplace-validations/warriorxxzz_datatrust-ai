@@ -32,4 +32,8 @@ class RequestHandler(BaseHTTPRequestHandler):
 if __name__ == '__main__':
     server = HTTPServer(('127.0.0.1', 8765), RequestHandler)
     print("✅ DataTrust AI Server is Live: http://127.0.0.1:8765")
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\n🛑 Server stopped gracefully.")
+        server.server_close()
