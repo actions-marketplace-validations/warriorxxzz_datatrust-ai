@@ -4,13 +4,16 @@ build-backend = "flit_core.buildapi"
 
 [project]
 name = "datatrust-privacy-guard"
-version = "0.1.0"
-description = "A local PII scanner for AI chat interfaces. Protects privacy with Nepal/India patterns and checksum validation."
+version = "0.3.0"
+description = "A local PII and Secret scanner for AI chats, files, and directories."
 readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "MIT"}
 authors = [
     {name = "warriorxxzz", email = "warriorxxzz8@gmail.com"}
+]
+dependencies = [
+    "rich>=13.0.0"
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -25,7 +28,6 @@ classifiers = [
 
 [project.scripts]
 datatrust = "datatrust_ai.cli:main"
-
 
 [tool.flit.module]
 name = "datatrust_ai"
