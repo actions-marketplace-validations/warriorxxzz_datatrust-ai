@@ -154,6 +154,10 @@ def calculate_security_score():
 
 def process_file_worker(args):
     filepath, fix_mode, gh_mode, min_severity = args
+    
+    if any(ignore in filepath for ignore in DEFAULT_IGNORES):
+        return filepath, [], {"files": 0, "findings": 0, "high": 0, "medium": 0, "fixed": 0}
+
     findings = []
     stats = {"files": 1, "findings": 0, "high": 0, "medium": 0, "fixed": 0}
     
@@ -268,9 +272,17 @@ def scan_staged_files(fix_mode: bool = False, gh_mode: bool = False):
     global_stats = {"files": 0, "findings": 0, "fixed": 0, "high": 0, "medium": 0}
     global_risk_found = False
     
+    ignores = load_ignore_patterns()
+    
     try:
         res = subprocess.run(["git", "diff", "--cached", "--name-only"], capture_output=True, text=True)
-        filepaths = [f.strip() for f in res.stdout.split('\n') if f.strip() and os.path.exists(f.strip())]
+        raw_files = res.stdout.split('\n')
+        filepaths = []
+        for f in raw_files:
+            f = f.strip()
+            if f and os.path.exists(f):
+                if not any(ignore in f for ignore in ignores):
+                    filepaths.append(f)
     except Exception:
         return
         
@@ -434,9 +446,9 @@ def main():
         hook_dir = ".git/hooks"
         if os.path.exists(hook_dir):
             with open(os.path.join(hook_dir, "pre-commit"), "w") as f:
-                f.write("#!/bin/sh\ndatatrust --staged\nif [ $? -ne 0 ]; then\n exit 1\nfi\n")
+                f.write("#!/bin/sh\necho \"🛡️ Running DataTrust AI Pre-commit Auto-Fix...\"\ndatatrust --staged --fix\ngit add -u\nexit 0\n")
             os.chmod(os.path.join(hook_dir, "pre-commit"), 0o755)
-        console.print("[bold #55efc4]✔ Automation setup complete.[/bold #55efc4]")
+        console.print("[bold #55efc4]✔ Automation setup complete. Pre-commit hook will now auto-fix and allow commits.[/bold #55efc4]")
         return
 
     if args.stats: show_stats(); return
