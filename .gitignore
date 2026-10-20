@@ -220,3 +220,4 @@ __marimo__/
 .streamlit/secrets.toml
 *.zip
 extension.zip
+.datatrust.db
