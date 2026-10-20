@@ -2,7 +2,7 @@
 
 A local-first DevSecOps CLI for detecting and auto-remediating Secrets, PII, SAST vulnerabilities, and IaC misconfigurations. 
 
-[![PyPI version](https://badge.fury.io/py/datatrust-privacy-guard.svg)](https://badge.fury.io/py/datatrust-privacy-guard)
+[![PyPI version](https://img.shields.io/pypi/v/datatrust-privacy-guard.svg)](https://pypi.org/project/datatrust-privacy-guard/)
 [![Python Tests](https://github.com/warriorxxzz/datatrust-ai/actions/workflows/python-test.yml/badge.svg)](https://github.com/warriorxxzz/datatrust-ai/actions/workflows/python-test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
