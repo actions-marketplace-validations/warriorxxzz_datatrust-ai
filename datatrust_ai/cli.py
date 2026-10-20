@@ -65,23 +65,6 @@ global_risk_found = False
 config = {}
 custom_plugins = []
 
-def show_tutorial():
-    console.print("\n[bold #a29bfe]📚 DataTrust AI - Complete Tutorial[/bold #a29bfe]\n")
-    
-    console.print(Panel("[bold white]1. Direct Text Scanning[/bold white]\nQuickly check if a text or prompt contains sensitive info.\n[cyan]datatrust \"My Aadhaar is 2345 6789 0123 and API key is sk-abc...\"[/cyan]", box=ROUNDED, border_style="dim cyan"))
-    
-    console.print(Panel("[bold white]2. Scan Entire Codebase[/bold white]\nScan the current directory for Secrets, SAST issues, Docker, and K8s misconfigurations.\n[cyan]datatrust -d .[/cyan]", box=ROUNDED, border_style="dim cyan"))
-    
-    console.print(Panel("[bold white]3. Auto-Fix Issues[/bold white]\nAutomatically move secrets to `.env` and fix Docker/K8s vulnerabilities.\n[cyan]datatrust -d . --fix[/cyan]", box=ROUNDED, border_style="dim cyan"))
-    
-    console.print(Panel("[bold white]4. Dependency Scanning (SCA)[/bold white]\nCheck requirements.txt for CVE vulnerabilities and license issues.\n[cyan]datatrust --sca[/cyan]\n[cyan]datatrust --license-check[/cyan]", box=ROUNDED, border_style="dim cyan"))
-    
-    console.print(Panel("[bold white]5. FAANG-Level Automation[/bold white]\nSetup Git pre-commit hooks and GitHub Actions in one command.\n[cyan]datatrust --automate[/cyan]", box=ROUNDED, border_style="dim cyan"))
-    
-    console.print(Panel("[bold white]6. CI/CD & Custom Plugins[/bold white]\nGenerate SARIF for GitHub, or write custom rules in `datatrust_plugins/`.\n[cyan]datatrust -d . --sarif[/cyan]\n[cyan]datatrust -d . --gh-actions[/cyan]", box=ROUNDED, border_style="dim cyan"))
-    
-    console.print("\n[italic #81ecec]For more details, visit: https://github.com/warriorxxzz/datatrust-ai[/italic #81ecec]\n")
-
 def init_db():
     conn = sqlite3.connect('.datatrust.db')
     conn.execute('CREATE TABLE IF NOT EXISTS scans (id INTEGER PRIMARY KEY, timestamp TEXT, files INTEGER, findings INTEGER, high INTEGER, score INTEGER)')
@@ -143,6 +126,11 @@ def load_config():
                 config = yaml.safe_load(f) or {}
         except Exception:
             pass
+
+def init_config():
+    with open("datatrust.yml", "w") as f:
+        f.write("ignore_paths:\n  - tests/\nignore_types:\n  - EMAIL\n")
+    console.print("[bold #55efc4]✔ Created datatrust.yml[/bold #55efc4]")
 
 def load_ignore_patterns():
     patterns = set(DEFAULT_IGNORES)
@@ -274,6 +262,40 @@ def process_file_worker(args):
         
     return filepath, findings, stats
 
+def scan_staged_files(fix_mode: bool = False, gh_mode: bool = False):
+    global global_stats, all_findings, global_risk_found
+    all_findings = []
+    global_stats = {"files": 0, "findings": 0, "fixed": 0, "high": 0, "medium": 0}
+    global_risk_found = False
+    
+    try:
+        res = subprocess.run(["git", "diff", "--cached", "--name-only"], capture_output=True, text=True)
+        filepaths = [f.strip() for f in res.stdout.split('\n') if f.strip() and os.path.exists(f.strip())]
+    except Exception:
+        return
+        
+    if not filepaths:
+        return
+
+    tasks = [(f, fix_mode, gh_mode, 1) for f in filepaths]
+    global_stats["files"] = len(filepaths)
+    
+    if gh_mode:
+        for task in tasks:
+            _, findings, stats = process_file_worker(task)
+            all_findings.extend(findings)
+            for k in global_stats: global_stats[k] += stats[k]
+    else:
+        with Progress(SpinnerColumn(), TextColumn("[cyan]Scanning staged files..."), BarColumn(), TaskProgressColumn()) as progress:
+            task_bar = progress.add_task("", total=len(tasks))
+            with concurrent.futures.ProcessPoolExecutor() as executor:
+                for fpath, findings, stats in executor.map(process_file_worker, tasks):
+                    all_findings.extend(findings)
+                    for k in global_stats: global_stats[k] += stats[k]
+                    progress.advance(task_bar)
+                    
+    global_risk_found = any(not f["fixed"] for f in all_findings)
+
 def scan_directory(directory: str, fix_mode: bool = False, gh_mode: bool = False):
     global global_stats, all_findings, global_risk_found
     all_findings = []
@@ -390,13 +412,14 @@ def main():
     load_config()
     custom_plugins = load_custom_plugins()
     
-    if not any(arg in sys.argv for arg in ['--sca', '--gh-actions', '--license-check', '--stats', '--automate', '--serve', '--tutorial']):
+    if not any(arg in sys.argv for arg in ['--sca', '--gh-actions', '--license-check', '--stats', '--automate', '--serve', '--staged']):
         console.print(BANNER)
     
     parser = argparse.ArgumentParser(description="DataTrust AI - Ultimate Enterprise Security Platform")
     parser.add_argument("text", nargs="?", help="Text to scan directly")
     parser.add_argument("--file", "-f", help="Scan a specific file")
     parser.add_argument("--dir", "-d", help="Scan an entire directory")
+    parser.add_argument("--staged", action="store_true", help="Scan only git staged files")
     parser.add_argument("--fix", action="store_true", help="Auto-fix issues")
     parser.add_argument("--serve", action="store_true", help="Start a local web server to view the report")
     parser.add_argument("--json", action="store_true", help="Output in JSON format")
@@ -405,12 +428,7 @@ def main():
     parser.add_argument("--stats", action="store_true", help="Show historical scan stats")
     parser.add_argument("--automate", action="store_true", help="Setup Git hooks and GitHub Actions")
     parser.add_argument("--gh-actions", action="store_true", help="Output in GitHub Actions format")
-    parser.add_argument("--tutorial", action="store_true", help="Show complete tutorial")
     args = parser.parse_args()
-
-    if args.tutorial:
-        show_tutorial()
-        return
 
     if args.automate:
         hook_dir = ".git/hooks"
@@ -444,7 +462,12 @@ def main():
             if global_risk_found: sys.exit(1)
             return
 
-    if args.dir:
+    if args.staged:
+        scan_staged_files(args.fix, args.gh_actions)
+        if not args.gh_actions and not args.json:
+            print_summary()
+            display_results_table()
+    elif args.dir:
         scan_directory(args.dir, args.fix, args.gh_actions)
         if not args.gh_actions and not args.json:
             print_summary()
