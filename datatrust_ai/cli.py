@@ -19,6 +19,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.box import ROUNDED
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+from rich.prompt import Prompt
 from datatrust_ai.detector import scan_text
 from datatrust_ai.ast_scanner import scan_ast
 from datatrust_ai.docker_scanner import scan_dockerfile
@@ -35,7 +36,7 @@ BANNER = r"""
  | |_| | (_| | || (_| | | || |  | |_| \__ \ |_ / ___ \ | |
  |____/ \__,_|\__\__,_| |_||_|   \__,_|___/\__/_/   \_\___|
 [/bold #a29bfe]
-[italic #81ecec]Ultimate Enterprise Security Platform | v2.3.0 Final[/italic #81ecec]
+[italic #81ecec]Ultimate Enterprise Security Platform | v2.4.0 Final[/italic #81ecec]
 """
 
 FRIENDLY_NAMES = {
@@ -64,6 +65,117 @@ all_findings = []
 global_risk_found = False
 config = {}
 custom_plugins = []
+
+def show_help():
+    console.print(BANNER)
+    console.print(Panel("[bold white]DataTrust AI - Complete Command Reference[/bold white]", box=ROUNDED, border_style="dim cyan"))
+    
+    table = Table(box=ROUNDED, show_header=True, header_style="bold #a29bfe")
+    table.add_column("Category", style="bold #81ecec", width=12)
+    table.add_column("Command", style="bold white", width=20)
+    table.add_column("Description", style="white", width=35)
+
+    table.add_row("Scanning", "datatrust \"text\"", "Scan a raw string (e.g., check before pasting into AI).")
+    table.add_row("Scanning", "datatrust -f <file>", "Scan a specific file.")
+    table.add_row("Scanning", "datatrust -d <dir>", "Scan an entire directory.")
+    table.add_row("Scanning", "datatrust --staged", "Scan only Git staged files (Fast).")
+    
+    table.add_row("Remediation", "datatrust -d . --fix", "Auto-fix secrets, Docker, and K8s issues.")
+    table.add_row("Remediation", "datatrust -d . --fix --dry-run", "Simulate fixes without changing files.")
+    
+    table.add_row("Automation", "datatrust --automate", "Setup Git pre-commit hooks & GitHub Actions.")
+    table.add_row("Automation", "datatrust --init", "Create a default datatrust.yml configuration.")
+    
+    table.add_row("CI/CD", "datatrust -d . --gh-actions", "Output errors in GitHub Actions format.")
+    table.add_row("CI/CD", "datatrust -d . --sarif", "Generate SARIF report for CodeQL/GitHub.")
+    table.add_row("CI/CD", "datatrust --sbom", "Generate CycloneDX SBOM (Supply Chain).")
+    table.add_row("CI/CD", "datatrust --json", "Output results in JSON format.")
+    
+    table.add_row("Utilities", "datatrust --serve", "Start a local web dashboard.")
+    table.add_row("Utilities", "datatrust --stats", "View historical scan stats.")
+    table.add_row("Utilities", "datatrust --license-check", "Check dependencies for restrictive licenses.")
+    table.add_row("Utilities", "datatrust --help", "Show this help menu.")
+    
+    console.print(table)
+    console.print("\n[italic #81ecec]Tip: Add # datatrust:ignore at the end of any line to skip it.[/italic #81ecec]\n")
+
+def interactive_menu():
+    global global_stats, all_findings, global_risk_found
+    while True:
+        console.print(BANNER)
+        console.print(Panel("[bold white]Interactive Menu[/bold white]", box=ROUNDED, border_style="dim cyan"))
+        console.print("[bold #81ecec]1.[/bold #81ecec] Scan Entire Directory (Current Folder)")
+        console.print("[bold #81ecec]2.[/bold #81ecec] Scan Specific File")
+        console.print("[bold #81ecec]3.[/bold #81ecec] Scan Raw Text")
+        console.print("[bold #81ecec]4.[/bold #81ecec] Auto-Fix Current Directory")
+        console.print("[bold #81ecec]5.[/bold #81ecec] Setup CI/CD Automation (Git Hooks)")
+        console.print("[bold #81ecec]6.[/bold #81ecec] View Historical Stats")
+        console.print("[bold #ff7675]7.[/bold #ff7675] Exit\n")
+
+        choice = Prompt.ask("[bold white]Select an option[/bold white]", choices=["1", "2", "3", "4", "5", "6", "7"], default="1")
+
+        if choice == "1":
+            global_stats = {"files": 0, "findings": 0, "fixed": 0, "high": 0, "medium": 0}
+            all_findings = []
+            global_risk_found = False
+            scan_directory(".", False, False, False)
+            print_summary()
+            display_results_table()
+            Prompt.ask("\n[dim]Press Enter to return to menu...[/dim]", default="")
+        elif choice == "2":
+            filepath = Prompt.ask("[bold white]Enter file path[/bold white]")
+            if os.path.exists(filepath):
+                global_stats = {"files": 1, "findings": 0, "fixed": 0, "high": 0, "medium": 0}
+                all_findings = []
+                global_risk_found = False
+                task = (filepath, False, False, 1, False)
+                _, findings, stats = process_file_worker(task)
+                all_findings.extend(findings)
+                for k in global_stats: global_stats[k] += stats[k]
+                global_risk_found = any(not f["fixed"] for f in all_findings)
+                print_summary()
+                display_results_table()
+            else:
+                console.print("[bold #ff7675]File not found![/bold #ff7675]")
+            Prompt.ask("\n[dim]Press Enter to return to menu...[/dim]", default="")
+        elif choice == "3":
+            text = Prompt.ask("[bold white]Enter text to scan[/bold white]")
+            global_stats = {"files": 1, "findings": 0, "fixed": 0, "high": 0, "medium": 0}
+            all_findings = []
+            global_risk_found = False
+            result = scan_text(text, include_value=True)
+            if result["risk"] != "NONE":
+                global_risk_found = True
+                for item in result["findings"]:
+                    all_findings.append({"file": "Input", "line": "-", "type": FRIENDLY_NAMES.get(item['type']), "severity": item["severity"], "value": item.get("value", ""), "fixed": False})
+                display_results_table()
+            else:
+                console.print("\n[bold #55efc4]✅ Safe. No sensitive info detected.[/bold #55efc4]")
+            Prompt.ask("\n[dim]Press Enter to return to menu...[/dim]", default="")
+        elif choice == "4":
+            global_stats = {"files": 0, "findings": 0, "fixed": 0, "high": 0, "medium": 0}
+            all_findings = []
+            global_risk_found = False
+            scan_directory(".", True, False, False)
+            print_summary()
+            display_results_table()
+            Prompt.ask("\n[dim]Press Enter to return to menu...[/dim]", default="")
+        elif choice == "5":
+            hook_dir = ".git/hooks"
+            if os.path.exists(hook_dir):
+                with open(os.path.join(hook_dir, "pre-commit"), "w") as f:
+                    f.write("#!/bin/sh\necho \"🛡️ Running DataTrust AI Pre-commit Auto-Fix...\"\ndatatrust --staged --fix\ngit add -u\nexit 0\n")
+                os.chmod(os.path.join(hook_dir, "pre-commit"), 0o755)
+                console.print("[bold #55efc4]✔ Automation setup complete. Pre-commit hook will now auto-fix and allow commits.[/bold #55efc4]")
+            else:
+                console.print("[bold #ff7675]Not a git repository. Cannot setup hooks.[/bold #ff7675]")
+            Prompt.ask("\n[dim]Press Enter to return to menu...[/dim]", default="")
+        elif choice == "6":
+            show_stats()
+            Prompt.ask("\n[dim]Press Enter to return to menu...[/dim]", default="")
+        elif choice == "7":
+            console.print("[bold #81ecec]Goodbye! Stay Secure. 🛡️[/bold #81ecec]")
+            break
 
 def init_db():
     conn = sqlite3.connect('.datatrust.db')
@@ -145,7 +257,7 @@ def calculate_security_score():
     remaining_high = len([f for f in all_findings if f['severity'] == 'HIGH' and not f.get('fixed')])
     remaining_med = len([f for f in all_findings if f['severity'] == 'MEDIUM' and not f.get('fixed')])
     score = max(0, 100 - (remaining_high * 10) - (remaining_med * 5))
-    
+
     if score >= 90: grade = "[bold #55efc4]A[/bold #55efc4]"
     elif score >= 80: grade = "[bold #81ecec]B[/bold #81ecec]"
     elif score >= 70: grade = "[bold #fdcb6e]C[/bold #fdcb6e]"
@@ -153,17 +265,17 @@ def calculate_security_score():
     return score, grade
 
 def process_file_worker(args):
-    filepath, fix_mode, gh_mode, min_severity = args
-    
+    filepath, fix_mode, gh_mode, min_severity, dry_run = args
+
     if any(ignore in filepath for ignore in DEFAULT_IGNORES):
         return filepath, [], {"files": 0, "findings": 0, "high": 0, "medium": 0, "fixed": 0}
 
     findings = []
     stats = {"files": 1, "findings": 0, "high": 0, "medium": 0, "fixed": 0}
-    
+
     if not filepath.endswith(('.py', '.txt', '.env', '.json', '.js', '.md', '.yaml', '.yml', '.csv', '.sh', '.xml', '.html', '.toml', '.ini', '.cfg', 'Dockerfile', '.dockerfile')):
         return filepath, findings, stats
-        
+
     try:
         if filepath.endswith('.py'):
             for af in scan_ast(filepath):
@@ -171,7 +283,7 @@ def process_file_worker(args):
                 stats["findings"] += 1
                 stats["high"] += 1
                 if gh_mode: print(f"::error file={filepath},line={af['line']}::{af['type']}")
-        
+
         if filepath.endswith(('Dockerfile', '.dockerfile')):
             for df in scan_dockerfile(filepath):
                 findings.append({"file": filepath, "line": df["line"], "type": FRIENDLY_NAMES.get(df["type"]), "severity": "HIGH", "value": df["value"], "fixed": False})
@@ -188,43 +300,46 @@ def process_file_worker(args):
 
         with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
             lines = f.readlines()
-            
+
         file_modified = False
         new_lines = []
-        
+
         for line_num, line in enumerate(lines, 1):
             if "# datatrust:ignore" in line:
                 new_lines.append(line)
                 continue
-                
+
             result = scan_text(line, include_value=fix_mode)
             if result["risk"] in ["HIGH", "MEDIUM"]:
                 real_findings = [i for i in result["findings"] if not (i["type"] == "PROMPT_INJECTION" and 'r"' in line)]
-                
+
                 if not real_findings:
                     new_lines.append(line)
                     continue
-                    
+
                 for item in real_findings:
                     if item["severity"] == "HIGH": stats["high"] += 1
                     if item["severity"] == "MEDIUM": stats["medium"] += 1
-                    
+
                     val_to_save = item.get("value", "")
                     finding_entry = {"file": filepath, "line": line_num, "type": FRIENDLY_NAMES.get(item['type']), "severity": item["severity"], "value": val_to_save, "fixed": False}
                     findings.append(finding_entry)
                     stats["findings"] += 1
                     if gh_mode: print(f"::error file={filepath},line={line_num}::{item['type']}")
-                
+
                 if fix_mode:
                     for item in real_findings:
                         if "value" in item:
                             val = item["value"]
                             var_name = f"DATATRUST_{item['type']}_{len(new_lines)}"
-                            with open(".env", "a") as env_file:
-                                env_file.write(f"{var_name}='{val}'\n")
+                            if dry_run:
+                                print(f"[DRY RUN] Would move secret to .env and replace in {filepath} (Line {line_num})")
+                            else:
+                                with open(".env", "a") as env_file:
+                                    env_file.write(f"{var_name}='{val}'\n")
                             line = line.replace(val, f"os.getenv('{var_name}')" if filepath.endswith('.py') else f"${var_name}")
                             file_modified = True
-                            
+
             for plugin in custom_plugins:
                 try:
                     plugin_results = plugin.scan_line(line)
@@ -238,42 +353,49 @@ def process_file_worker(args):
 
             if fix_mode and filepath.endswith(('Dockerfile', '.dockerfile')):
                 if re.match(r'(?i)^USER\s+root', line.strip()):
+                    if dry_run: print(f"[DRY RUN] Would change USER root to USER nonroot in {filepath} (Line {line_num})")
                     line = re.sub(r'(?i)^USER\s+root', 'USER nonroot', line)
                     file_modified = True
                 if re.match(r'(?i)^ADD\s+', line.strip()):
+                    if dry_run: print(f"[DRY RUN] Would change ADD to COPY in {filepath} (Line {line_num})")
                     line = re.sub(r'(?i)^ADD\s+', 'COPY ', line)
                     file_modified = True
 
             if fix_mode and filepath.endswith(('.yaml', '.yml')):
                 if 'privileged: true' in line:
+                    if dry_run: print(f"[DRY RUN] Would change privileged: true to false in {filepath} (Line {line_num})")
                     line = line.replace('privileged: true', 'privileged: false')
                     file_modified = True
                 if 'allowPrivilegeEscalation: true' in line:
+                    if dry_run: print(f"[DRY RUN] Would change allowPrivilegeEscalation to false in {filepath} (Line {line_num})")
                     line = line.replace('allowPrivilegeEscalation: true', 'allowPrivilegeEscalation: false')
                     file_modified = True
 
             new_lines.append(line)
-            
-        if fix_mode and file_modified:
+
+        if fix_mode and file_modified and not dry_run:
             with open(filepath, 'w', encoding='utf-8') as f:
                 f.writelines(new_lines)
             stats["fixed"] += 1
             for f in findings:
                 f["fixed"] = True
-                
+        elif fix_mode and file_modified and dry_run:
+            for f in findings:
+                f["fixed"] = True
+
     except Exception:
         pass
-        
+
     return filepath, findings, stats
 
-def scan_staged_files(fix_mode: bool = False, gh_mode: bool = False):
+def scan_staged_files(fix_mode: bool = False, gh_mode: bool = False, dry_run: bool = False):
     global global_stats, all_findings, global_risk_found
     all_findings = []
     global_stats = {"files": 0, "findings": 0, "fixed": 0, "high": 0, "medium": 0}
     global_risk_found = False
-    
+
     ignores = load_ignore_patterns()
-    
+
     try:
         res = subprocess.run(["git", "diff", "--cached", "--name-only"], capture_output=True, text=True)
         raw_files = res.stdout.split('\n')
@@ -285,13 +407,13 @@ def scan_staged_files(fix_mode: bool = False, gh_mode: bool = False):
                     filepaths.append(f)
     except Exception:
         return
-        
+
     if not filepaths:
         return
 
-    tasks = [(f, fix_mode, gh_mode, 1) for f in filepaths]
+    tasks = [(f, fix_mode, gh_mode, 1, dry_run) for f in filepaths]
     global_stats["files"] = len(filepaths)
-    
+
     if gh_mode:
         for task in tasks:
             _, findings, stats = process_file_worker(task)
@@ -305,18 +427,18 @@ def scan_staged_files(fix_mode: bool = False, gh_mode: bool = False):
                     all_findings.extend(findings)
                     for k in global_stats: global_stats[k] += stats[k]
                     progress.advance(task_bar)
-                    
+
     global_risk_found = any(not f["fixed"] for f in all_findings)
 
-def scan_directory(directory: str, fix_mode: bool = False, gh_mode: bool = False):
+def scan_directory(directory: str, fix_mode: bool = False, gh_mode: bool = False, dry_run: bool = False):
     global global_stats, all_findings, global_risk_found
     all_findings = []
     global_stats = {"files": 0, "findings": 0, "fixed": 0, "high": 0, "medium": 0}
     global_risk_found = False
-    
+
     ignores = load_ignore_patterns()
     filepaths = []
-    
+
     for root, dirs, files in os.walk(directory):
         dirs[:] = [d for d in dirs if d not in ignores]
         for file in files:
@@ -337,7 +459,7 @@ def scan_directory(directory: str, fix_mode: bool = False, gh_mode: bool = False
         if not gh_mode: console.print("[yellow]No new or modified files to scan.[/yellow]")
         return
 
-    tasks = [(f, fix_mode, gh_mode, 1) for f in files_to_scan]
+    tasks = [(f, fix_mode, gh_mode, 1, dry_run) for f in files_to_scan]
 
     if gh_mode:
         for task in tasks:
@@ -354,7 +476,7 @@ def scan_directory(directory: str, fix_mode: bool = False, gh_mode: bool = False
                     if not fix_mode:
                         update_cache(fpath, get_file_hash(fpath))
                     progress.advance(task_bar)
-                    
+
     global_risk_found = any(not f["fixed"] for f in all_findings)
 
 def display_results_table():
@@ -375,10 +497,10 @@ def display_results_table():
             status = f["severity"]
             risk_color = "bold #ff7675" if f["severity"] == "HIGH" else "bold #fdcb6e"
             detail = f"🔴 {f['type']}"
-            
-        if f.get("value") and not f.get("fixed"): 
+
+        if f.get("value") and not f.get("fixed"):
             detail += f"\n[dim #b2bec3]{mask_secret(str(f['value']))}[/dim #b2bec3]"
-            
+
         table.add_row(f["file"], str(f["line"]), f"[{risk_color}]{status}[/{risk_color}]", detail)
     console.print("\n", table)
 
@@ -392,7 +514,7 @@ def print_summary():
     table.add_row("Total Findings", str(global_stats["findings"]))
     if global_stats["fixed"] > 0:
         table.add_row("Auto-Fixed Files", f"[#55efc4]{global_stats['fixed']}[/#55efc4]")
-        
+
     remaining_high = len([f for f in all_findings if f['severity']=='HIGH' and not f['fixed']])
     table.add_row("Remaining High Risk", f"[#ff7675]{remaining_high}[/#ff7675]")
     console.print("\n", table)
@@ -418,29 +540,76 @@ def generate_sarif_report():
         json.dump(sarif, file, indent=2)
     console.print("[bold #81ecec]📄 SARIF report generated: datatrust.sarif[/bold #81ecec]")
 
+def generate_sbom():
+    if not os.path.exists("requirements.txt"):
+        console.print("[yellow]No requirements.txt found for SBOM.[/yellow]")
+        return
+    with open("requirements.txt", "r") as f:
+        lines = f.readlines()
+    
+    components = []
+    for line in lines:
+        line = line.strip()
+        if line and not line.startswith("#"):
+            match = re.match(r"([a-zA-Z0-9_-]+)==([0-9.]+)", line)
+            if match:
+                components.append({
+                    "type": "library",
+                    "name": match.group(1),
+                    "version": match.group(2),
+                    "purl": f"pkg:pypi/{match.group(1)}@{match.group(2)}"
+                })
+    
+    sbom = {
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.4",
+        "version": 1,
+        "metadata": {
+            "component": {"type": "application", "name": "DataTrust AI"}
+        },
+        "components": components
+    }
+    with open("datatrust_sbom.json", "w") as f:
+        json.dump(sbom, f, indent=2)
+    console.print("[bold #81ecec]📄 CycloneDX SBOM generated: datatrust_sbom.json[/bold #81ecec]")
+
 def main():
     global global_risk_found, custom_plugins
     init_db()
     load_config()
     custom_plugins = load_custom_plugins()
-    
-    if not any(arg in sys.argv for arg in ['--sca', '--gh-actions', '--license-check', '--stats', '--automate', '--serve', '--staged']):
+
+    if len(sys.argv) == 1:
+        interactive_menu()
+        return
+
+    if "--help" in sys.argv or "-h" in sys.argv:
+        show_help()
+        return
+
+    if not any(arg in sys.argv for arg in ['--sca', '--gh-actions', '--license-check', '--stats', '--automate', '--serve', '--staged', '--sbom']):
         console.print(BANNER)
-    
-    parser = argparse.ArgumentParser(description="DataTrust AI - Ultimate Enterprise Security Platform")
+
+    parser = argparse.ArgumentParser(description="DataTrust AI - Ultimate Enterprise Security Platform", add_help=False)
     parser.add_argument("text", nargs="?", help="Text to scan directly")
     parser.add_argument("--file", "-f", help="Scan a specific file")
     parser.add_argument("--dir", "-d", help="Scan an entire directory")
     parser.add_argument("--staged", action="store_true", help="Scan only git staged files")
     parser.add_argument("--fix", action="store_true", help="Auto-fix issues")
+    parser.add_argument("--dry-run", action="store_true", help="Simulate fixes without writing to files")
     parser.add_argument("--serve", action="store_true", help="Start a local web server to view the report")
     parser.add_argument("--json", action="store_true", help="Output in JSON format")
     parser.add_argument("--sarif", action="store_true", help="Generate SARIF report for GitHub Advanced Security")
+    parser.add_argument("--sbom", action="store_true", help="Generate CycloneDX Software Bill of Materials")
     parser.add_argument("--report-md", action="store_true", help="Generate Markdown report for PR comments")
     parser.add_argument("--stats", action="store_true", help="Show historical scan stats")
     parser.add_argument("--automate", action="store_true", help="Setup Git hooks and GitHub Actions")
     parser.add_argument("--gh-actions", action="store_true", help="Output in GitHub Actions format")
     args = parser.parse_args()
+
+    if args.sbom:
+        generate_sbom()
+        return
 
     if args.automate:
         hook_dir = ".git/hooks"
@@ -452,7 +621,7 @@ def main():
         return
 
     if args.stats: show_stats(); return
-    if args.serve: 
+    if args.serve:
         handler = partial(SimpleHTTPRequestHandler, directory=os.getcwd())
         server = HTTPServer(('127.0.0.1', 8080), handler)
         console.print(f"[bold #81ecec]🌐 Web Server at http://127.0.0.1:8080[/bold #81ecec]")
@@ -475,18 +644,18 @@ def main():
             return
 
     if args.staged:
-        scan_staged_files(args.fix, args.gh_actions)
+        scan_staged_files(args.fix, args.gh_actions, args.dry_run)
         if not args.gh_actions and not args.json:
             print_summary()
             display_results_table()
     elif args.dir:
-        scan_directory(args.dir, args.fix, args.gh_actions)
+        scan_directory(args.dir, args.fix, args.gh_actions, args.dry_run)
         if not args.gh_actions and not args.json:
             print_summary()
             display_results_table()
     elif args.file:
         global_stats["files"] = 1
-        task = (args.file, args.fix, args.gh_actions, 1)
+        task = (args.file, args.fix, args.gh_actions, 1, args.dry_run)
         _, findings, stats = process_file_worker(task)
         all_findings.extend(findings)
         for k in global_stats: global_stats[k] += stats[k]
@@ -504,7 +673,8 @@ def main():
         else:
             if not args.json: console.print("\n[bold #55efc4]✅ Safe.[/bold #55efc4]")
     else:
-        console.print("[#a29bfe]Usage: datatrust \"text\" | -d dir | cat file | datatrust[/#a29bfe]")
+        show_help()
+        return
 
     if args.json:
         print(json.dumps({"score": calculate_security_score()[0], "findings": all_findings}, indent=2))

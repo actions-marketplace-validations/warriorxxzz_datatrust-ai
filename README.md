@@ -43,6 +43,13 @@ pip install datatrust-privacy-guard
 
 Quick Start
 
+2. **0. Interactive Menu (Easiest):**
+Just type `dt` (or `datatrust`) and press Enter. A beautiful interactive menu will guide you through all the features.
+
+```bash
+dt
+```
+
 1. Scan a text prompt (e.g., before pasting into ChatGPT):
 
 ```bash

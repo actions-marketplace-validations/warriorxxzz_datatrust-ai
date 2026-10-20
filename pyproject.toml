@@ -4,8 +4,8 @@ build-backend = "flit_core.buildapi"
 
 [project]
 name = "datatrust-privacy-guard"
-version = "2.3.0"
-description = "A local PII and Secret scanner for AI chats, files, and directories."
+version = "2.4.0"
+description = "An Enterprise-grade DevSecOps CLI for detecting and auto-remediating Secrets, PII, SAST, and IaC vulnerabilities. Built in Python."
 readme = "README.md"
 requires-python = ">=3.8"
 license = "MIT"
@@ -23,15 +23,13 @@ classifiers = [
     "Topic :: Security",
 ]
 
-[project.optional-dependencies]
-nlp = ["spacy>=3.0.0"]
-
 [project.urls]
 "Homepage" = "https://github.com/warriorxxzz/datatrust-ai"
 "Bug Tracker" = "https://github.com/warriorxxzz/datatrust-ai/issues"
 
 [project.scripts]
 datatrust = "datatrust_ai.cli:main"
+dt = "datatrust_ai.cli:main"
 
 [tool.flit.module]
 name = "datatrust_ai"
