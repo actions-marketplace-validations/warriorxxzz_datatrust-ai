@@ -39,7 +39,7 @@ DataTrust AI is designed to run instantly in your local environment without send
 
 ```bash
 pip install datatrust-privacy-guard
-
+```
 
 Quick Start
 
