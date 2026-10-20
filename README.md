@@ -1,45 +1,169 @@
 # DataTrust AI
 
+A local-first DevSecOps CLI for detecting and auto-remediating Secrets, PII, SAST vulnerabilities, and IaC misconfigurations. 
+
 [![PyPI version](https://badge.fury.io/py/datatrust-privacy-guard.svg)](https://badge.fury.io/py/datatrust-privacy-guard)
 [![Python Tests](https://github.com/warriorxxzz/datatrust-ai/actions/workflows/python-test.yml/badge.svg)](https://github.com/warriorxxzz/datatrust-ai/actions/workflows/python-test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
-![DataTrust AI Demo](demo.jpg)
+---
 
-A local PII (Personally Identifiable Information) scanner designed for AI chat interfaces.
+## Table of Contents
+- [Core Features](#core-features)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Advanced Usage](#advanced-usage)
+- [CI/CD Integration](#cicd-integration)
+- [Configuration](#configuration)
+- [Architecture](#architecture)
+- [Contributing](#contributing)
+- [License](#license)
 
-It checks the text you are about to send to **120+ AI platforms** (including ChatGPT, Claude, Gemini, and DeepSeek) and warns you if it contains sensitive information like citizenship numbers, PANs, Aadhaar, or phone numbers. Everything runs locally on your device. No data is sent to any server.
+---
 
-## Why this exists
+## Core Features
 
-People casually paste personal information into AI chats. Once it's in the context window, you can't take it back. 
+DataTrust AI is designed to run instantly in your local environment without sending your code to the cloud.
 
-Most existing privacy tools are either enterprise-focused or heavily bloated. DataTrust AI is lightweight, built with Python's standard library, and specifically handles local formats like Nepali and Indian IDs. It also uses mathematical checksums to prevent false positives.
+- **Secret & PII Detection**: Detects AWS, OpenAI, and GitHub tokens using Shannon Entropy. Supports regional PII (Nepal/India) and handles Devanagari digits.
+- **SAST (Static Analysis)**: Parses Python AST to detect SQL Injection risks, weak cryptography (e.g., MD5), and dangerous function calls (`eval`, `exec`).
+- **Infrastructure as Code (IaC)**: Scans `Dockerfile` for root users/hardcoded secrets and Kubernetes YAMLs for `privileged: true`.
+- **Dependency Scanning (SCA)**: Checks `requirements.txt` against the OSV database for known CVEs.
+- **Auto-Remediation**: Automatically moves exposed secrets to `.env`, changes Docker `USER root` to `USER nonroot`, and fixes K8s YAML misconfigurations.
+- **Blazing Fast**: Uses multi-processing and MD5 SQLite caching to only scan modified files.
+- **Extensible**: Write custom detection rules using the local plugin system.
 
-## Current Features
+---
 
-- **120+ AI Platforms Supported**: Works seamlessly on ChatGPT, Claude, Gemini, Copilot, Perplexity, DeepSeek, and many more.
-- **Nepal & India Patterns**: Detects Citizenship, NID, PAN, Aadhaar, UPI, Passport, and mobile numbers.
-- **Devanagari Support**: Automatically normalizes Devanagari digits (`१२३`) to ASCII (`123`) before scanning.
-- **Checksum Validation**: Uses the Luhn algorithm for Credit Cards and the Verhoeff algorithm for Aadhaar to ignore fake numbers.
-- **Privacy-First**: The scanner never returns the actual detected value. It only returns the type and position of the match.
-- **Lightweight**: Zero heavy dependencies. Uses Python's built-in `re` module.
-- **Browser Extension**: Real-time warning banner directly inside the AI chat interface.
-
-## Challenges Faced While Building This
-
-Building a full-stack cybersecurity tool entirely from an Android phone using Termux was not easy. Here are some real challenges I solved during development:
-
-- **Mobile Development Environment**: Setting up Python, handling storage permissions (`termux-setup-storage`), and dealing with the Android file system restrictions.
-- **PyPI Publishing Issues**: Tools like `twine` and `pydantic` failed to compile because they rely on Rust, which is difficult to set up on mobile. I solved this by switching to a pure Python approach using the built-in `http.server` module and the `flit` build backend.
-- **Browser Caching**: The Lemur browser kept holding onto old cached JavaScript files, making it difficult to test the new UI. I had to learn how to force-reload unpacked extensions.
-- **Regex Overlap**: Writing regex for local IDs (like Citizenship numbers) often caused them to overlap with phone numbers. I had to implement a sorting logic in `detector.py` to keep only the longest, most accurate match.
-
-## How to use it
-
-### 1. Command Line Interface (CLI)
-
-You can install the package directly from PyPI.
+## Installation
 
 ```bash
 pip install datatrust-privacy-guard
+
+
+Quick Start
+
+1. Scan a text prompt (e.g., before pasting into ChatGPT):
+
+```bash
+datatrust "My Aadhaar is 2345 6789 0123 and my OpenAI key is sk-abc123..."
+```
+
+2. Scan your entire repository:
+
+```bash
+datatrust -d .
+```
+
+3. Scan and Auto-Fix vulnerabilities:
+
+```bash
+datatrust -d . --fix
+```
+
+(This moves secrets to .env and patches Docker/K8s files automatically).
+
+---
+
+Advanced Usage
+
+1. Setup FAANG-Level Automation
+
+Create local Git pre-commit hooks and GitHub Actions workflows in one command. DataTrust will automatically block commits if secrets are detected.
+
+```bash
+datatrust --automate
+```
+
+2. Dependency & License Scans
+
+```bash
+datatrust --sca            # Scan for CVEs
+datatrust --license-check  # Check for restrictive licenses (GPL, AGPL)
+```
+
+3. Local Web Dashboard
+
+Generate a beautiful HTML report and serve it locally.
+
+```bash
+datatrust -d . --serve
+```
+
+4. Writing Custom Plugins
+
+Create a folder named datatrust_plugins in your project root. Add a Python file (e.g., my_rule.py):
+
+```python
+def scan_line(line):
+    if "company_secret_token_" in line:
+        return [{"type": "Company Internal Token", "severity": "HIGH", "value": line}]
+    return []
+```
+
+DataTrust will automatically load this rule on the next run.
+
+---
+
+CI/CD Integration
+
+DataTrust AI is designed for pipelines. It exits with code 1 if high-severity issues are found.
+
+GitHub Actions Format:
+
+```bash
+datatrust -d . --gh-actions
+```
+
+SARIF Output (For GitHub Advanced Security):
+
+```bash
+datatrust -d . --sarif
+```
+
+---
+
+Configuration
+
+Generate a default config file:
+
+```bash
+datatrust --init
+```
+
+Edit datatrust.yml to ignore specific paths or rules:
+
+```yaml
+ignore_paths:
+  - tests/
+  - docs/
+ignore_types:
+  - EMAIL
+  - IPV4
+```
+
+You can also add # datatrust:ignore to the end of any line to skip scanning that specific line.
+
+---
+
+Architecture
+
+DataTrust AI is built with zero heavy dependencies (no PyTorch, no Transformers). It relies on:
+
+· Python ast module: For structural code analysis (SAST).
+· Shannon Entropy: For mathematical detection of random strings/secrets.
+· SQLite: For local caching and historical scan tracking.
+· Multiprocessing: For parallel file scanning.
+
+---
+
+Contributing
+
+Contributions are highly encouraged. Whether it's adding new PII regex patterns, improving SAST rules, or fixing bugs.
+
+1. Fork the repository.
+2. Create your feature branch (git checkout -b feature/AmazingFeature).
+3. Run tests (python -m unittest discover tests).
+4. Commit your changes.
+5. Open a Pull Request.
+

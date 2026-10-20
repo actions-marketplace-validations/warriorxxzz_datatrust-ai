@@ -1,0 +1,6 @@
+-   id: datatrust
+    name: DataTrust AI Scanner
+    description: Scan for PII and Secrets
+    entry: datatrust -d .
+    language: python
+    pass_filenames: false

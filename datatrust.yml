@@ -1,0 +1,6 @@
+ignore_paths:
+  - tests/
+  - docs/
+ignore_types:
+  - EMAIL
+  - IPV4

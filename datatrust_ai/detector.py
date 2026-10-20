@@ -1,6 +1,5 @@
 import re
-import os
-import json
+import base64
 from datatrust_ai.normalizer import normalize_digits
 from datatrust_ai.patterns.nepal import NEPAL_PATTERNS
 from datatrust_ai.patterns.india import INDIA_PATTERNS
@@ -19,22 +18,28 @@ SEVERITY = {
     "NP_PHONE_MOBILE": "MEDIUM", "NP_PHONE_LANDLINE": "LOW",
     "IN_AADHAAR": "HIGH", "IN_PAN": "HIGH", "IN_UPI": "MEDIUM", "IN_IFSC": "LOW", "IN_PHONE_MOBILE": "MEDIUM",
     "CREDIT_CARD": "HIGH", "AWS_KEY": "HIGH", "OPENAI_KEY": "HIGH", "GITHUB_PAT": "HIGH", "GOOGLE_API": "HIGH", "PRIVATE_KEY": "HIGH",
-    "EMAIL": "LOW", "IPV4": "LOW", "HIGH_ENTROPY": "HIGH",
+    "EMAIL": "LOW", "IPV4": "LOW", "HIGH_ENTROPY": "HIGH", "PROMPT_INJECTION": "HIGH",
     "NLP_PERSON": "MEDIUM", "NLP_GPE": "MEDIUM"
 }
 
 ALL_PATTERNS = {**NEPAL_PATTERNS, **INDIA_PATTERNS, **GLOBAL_PATTERNS}
 
-if os.path.exists("custom_rules.json"):
+PROMPT_PATTERNS = [
+    r"(?i)ignore (all )?previous instructions",
+    r"(?i)system prompt",
+    r"(?i)you are now a",
+    r"(?i)jailbreak",
+    r"(?i)bypass (all )?rules"
+]
+
+def decode_base64(text: str) -> str:
     try:
-        with open("custom_rules.json", "r") as f:
-            custom_rules = json.load(f)
-            for name, regex in custom_rules.items():
-                ALL_PATTERNS[name] = regex
-                if name not in SEVERITY:
-                    SEVERITY[name] = "HIGH"
+        decoded = base64.b64decode(text + "==").decode('utf-8')
+        if len(decoded) > 4 and decoded.isprintable():
+            return decoded
     except Exception:
         pass
+    return ""
 
 def scan_text(text: str, include_value: bool = False) -> dict:
     normalized = normalize_digits(text)
@@ -45,39 +50,38 @@ def scan_text(text: str, include_value: bool = False) -> dict:
             value = match.group()
             if name == "CREDIT_CARD" and not is_valid_luhn(value): continue
             if name == "IN_AADHAAR" and not is_valid_verhoeff(value): continue
-            item = {
-                "type": name,
-                "severity": SEVERITY.get(name, "LOW"),
-                "start": match.start(),
-                "end": match.end(),
-            }
+            item = {"type": name, "severity": SEVERITY.get(name, "LOW"), "start": match.start(), "end": match.end()}
             if include_value: item["value"] = value
             findings.append(item)
 
-    for match in re.finditer(r'\b[A-Za-z0-9+/=_-]{16,}\b', normalized):
+    url_pattern = re.compile(r'https?://\S+')
+    clean_text = url_pattern.sub('', normalized)
+
+    for match in re.finditer(r'\b[A-Za-z0-9+/=_-]{16,}\b', clean_text):
         val = match.group()
-        if "http" in text.lower()[max(0, match.start()-10):match.start()]:
-            continue
         if calculate_shannon_entropy(val) > 4.0:
-            item = {
-                "type": "HIGH_ENTROPY",
-                "severity": "HIGH",
-                "start": match.start(),
-                "end": match.end(),
-            }
+            item = {"type": "HIGH_ENTROPY", "severity": "HIGH", "start": match.start(), "end": match.end()}
             if include_value: item["value"] = val
             findings.append(item)
+            
+        decoded_val = decode_base64(val)
+        if decoded_val:
+            decoded_scan = scan_text(decoded_val, include_value)
+            for df in decoded_scan["findings"]:
+                df["type"] = f"BASE64_{df['type']}"
+                findings.append(df)
 
-    if NLP_AVAILABLE and len(normalized) < 1000:
-        doc = nlp(normalized)
+    for pattern in PROMPT_PATTERNS:
+        for match in re.finditer(pattern, normalized):
+            item = {"type": "PROMPT_INJECTION", "severity": "HIGH", "start": match.start(), "end": match.end()}
+            if include_value: item["value"] = match.group()
+            findings.append(item)
+
+    if NLP_AVAILABLE and len(clean_text) < 1000:
+        doc = nlp(clean_text)
         for ent in doc.ents:
             if ent.label_ in ["PERSON", "GPE"]:
-                item = {
-                    "type": f"NLP_{ent.label_}",
-                    "severity": SEVERITY.get(f"NLP_{ent.label_}", "MEDIUM"),
-                    "start": ent.start_char,
-                    "end": ent.end_char,
-                }
+                item = {"type": f"NLP_{ent.label_}", "severity": SEVERITY.get(f"NLP_{ent.label_}", "MEDIUM"), "start": ent.start_char, "end": ent.end_char}
                 if include_value: item["value"] = ent.text
                 findings.append(item)
 
@@ -89,9 +93,7 @@ def scan_text(text: str, include_value: bool = False) -> dict:
             if max(f["start"], existing["start"]) < min(f["end"], existing["end"]):
                 overlap = True
                 break
-        if not overlap:
-            filtered.append(f)
-
+        if not overlap: filtered.append(f)
     filtered.sort(key=lambda x: x["start"])
 
     if any(f["severity"] == "HIGH" for f in filtered): risk = "HIGH"

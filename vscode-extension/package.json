@@ -1,0 +1,23 @@
+{
+  "name": "datatrust-vscode",
+  "displayName": "DataTrust AI",
+  "description": "Detects PII and secrets in your code",
+  "version": "0.1.0",
+  "publisher": "warriorxxzz",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "activationEvents": [
+    "onLanguage:python",
+    "onLanguage:javascript"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "datatrust.scan",
+        "title": "DataTrust: Scan File"
+      }
+    ]
+  }
+}

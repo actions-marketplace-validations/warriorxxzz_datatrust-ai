@@ -5,14 +5,38 @@ import argparse
 import concurrent.futures
 import subprocess
 import re
+import requests
+import webbrowser
+import yaml
+import xml.etree.ElementTree as ET
+import sqlite3
+import hashlib
+from datetime import datetime
+from http.server import SimpleHTTPRequestHandler, HTTPServer
+from functools import partial
 from rich.console import Console
 from rich.panel import Panel
-from rich.text import Text
 from rich.table import Table
+from rich.box import ROUNDED
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 from datatrust_ai.detector import scan_text
+from datatrust_ai.ast_scanner import scan_ast
+from datatrust_ai.docker_scanner import scan_dockerfile
+from datatrust_ai.iac_scanner import scan_iac
+from datatrust_ai.plugin_manager import load_custom_plugins
 
 console = Console()
+
+BANNER = r"""
+[bold #a29bfe]
+  ____        _        _____               _     _      _    ___ 
+ |  _ \  __ _| |_ __ _|_   _| _ __ _   _ ___| |_  / \  |_ _|
+ | | | |/ _` | __/ _` | | || '__| | | / __| __| / _ \  | |
+ | |_| | (_| | || (_| | | || |  | |_| \__ \ |_ / ___ \ | |
+ |____/ \__,_|\__\__,_| |_||_|   \__,_|___/\__/_/   \_\___|
+[/bold #a29bfe]
+[italic #81ecec]Ultimate Enterprise Security Platform | v2.3.0 Final[/italic #81ecec]
+"""
 
 FRIENDLY_NAMES = {
     "NP_CITIZENSHIP": "Nepal Citizenship Number", "NP_NID": "National ID (NID)",
@@ -24,69 +48,152 @@ FRIENDLY_NAMES = {
     "OPENAI_KEY": "OpenAI API Key", "GITHUB_PAT": "GitHub Personal Access Token",
     "GOOGLE_API": "Google API Key", "PRIVATE_KEY": "SSH/RSA Private Key",
     "EMAIL": "Email Address", "IPV4": "IP Address", "HIGH_ENTROPY": "High Entropy Secret/Password",
-    "NLP_PERSON": "Person Name (AI)", "NLP_GPE": "Location/Address (AI)"
+    "AST_HARDCODED": "AST: Hardcoded Secret", "DANGEROUS_FUNC": "SAST: Dangerous Function",
+    "WEAK_CRYPTO": "SAST: Weak Cryptography", "SQL_INJECTION": "SAST: SQL Injection Risk",
+    "PROMPT_INJECTION": "AI Prompt Injection Attempt",
+    "DOCKER_ROOT_USER": "Docker: Running as Root", "DOCKER_HARDCODED_SECRET": "Docker: Hardcoded Secret",
+    "DOCKER_ADD_USAGE": "Docker: ADD instead of COPY",
+    "K8S_PRIVILEGED": "K8s: Privileged Mode Enabled", "K8S_PRIV_ESC": "K8s: Privilege Escalation",
+    "K8S_HARDCODED_SECRET": "K8s: Hardcoded Secret in YAML",
+    "BASE64_AWS_KEY": "Base64 AWS Key", "BASE64_HIGH_ENTROPY": "Base64 Secret"
 }
 
-DEFAULT_IGNORES = ['.git', 'venv', 'env', '__pycache__', 'node_modules', 'dist', 'build', '.github', 'custom_rules.json', 'datatrust.sarif']
-global_stats = {"files": 0, "findings": 0, "high": 0, "medium": 0}
+DEFAULT_IGNORES = ['.git', 'venv', 'env', '__pycache__', 'node_modules', 'dist', 'build', '.github', 'custom_rules.json', 'datatrust.sarif', '.egg-info', 'datatrust_ai', 'datatrust_report.html', 'datatrust.yml', '.datatrust.db', 'extension', 'tests', 'docs', 'datatrust_plugins']
+global_stats = {"files": 0, "findings": 0, "fixed": 0, "high": 0, "medium": 0}
 all_findings = []
 global_risk_found = False
-env_counter = 1
+config = {}
+custom_plugins = []
+
+def show_tutorial():
+    console.print("\n[bold #a29bfe]📚 DataTrust AI - Complete Tutorial[/bold #a29bfe]\n")
+    
+    console.print(Panel("[bold white]1. Direct Text Scanning[/bold white]\nQuickly check if a text or prompt contains sensitive info.\n[cyan]datatrust \"My Aadhaar is 2345 6789 0123 and API key is sk-abc...\"[/cyan]", box=ROUNDED, border_style="dim cyan"))
+    
+    console.print(Panel("[bold white]2. Scan Entire Codebase[/bold white]\nScan the current directory for Secrets, SAST issues, Docker, and K8s misconfigurations.\n[cyan]datatrust -d .[/cyan]", box=ROUNDED, border_style="dim cyan"))
+    
+    console.print(Panel("[bold white]3. Auto-Fix Issues[/bold white]\nAutomatically move secrets to `.env` and fix Docker/K8s vulnerabilities.\n[cyan]datatrust -d . --fix[/cyan]", box=ROUNDED, border_style="dim cyan"))
+    
+    console.print(Panel("[bold white]4. Dependency Scanning (SCA)[/bold white]\nCheck requirements.txt for CVE vulnerabilities and license issues.\n[cyan]datatrust --sca[/cyan]\n[cyan]datatrust --license-check[/cyan]", box=ROUNDED, border_style="dim cyan"))
+    
+    console.print(Panel("[bold white]5. FAANG-Level Automation[/bold white]\nSetup Git pre-commit hooks and GitHub Actions in one command.\n[cyan]datatrust --automate[/cyan]", box=ROUNDED, border_style="dim cyan"))
+    
+    console.print(Panel("[bold white]6. CI/CD & Custom Plugins[/bold white]\nGenerate SARIF for GitHub, or write custom rules in `datatrust_plugins/`.\n[cyan]datatrust -d . --sarif[/cyan]\n[cyan]datatrust -d . --gh-actions[/cyan]", box=ROUNDED, border_style="dim cyan"))
+    
+    console.print("\n[italic #81ecec]For more details, visit: https://github.com/warriorxxzz/datatrust-ai[/italic #81ecec]\n")
+
+def init_db():
+    conn = sqlite3.connect('.datatrust.db')
+    conn.execute('CREATE TABLE IF NOT EXISTS scans (id INTEGER PRIMARY KEY, timestamp TEXT, files INTEGER, findings INTEGER, high INTEGER, score INTEGER)')
+    conn.execute('CREATE TABLE IF NOT EXISTS cache (filepath TEXT PRIMARY KEY, filehash TEXT)')
+    conn.commit()
+    conn.close()
+
+def get_file_hash(filepath):
+    hasher = hashlib.md5()
+    try:
+        with open(filepath, 'rb') as f:
+            hasher.update(f.read())
+        return hasher.hexdigest()
+    except Exception:
+        return ""
+
+def is_cached(filepath, filehash):
+    conn = sqlite3.connect('.datatrust.db')
+    cur = conn.cursor()
+    cur.execute("SELECT filehash FROM cache WHERE filepath=?", (filepath,))
+    row = cur.fetchone()
+    conn.close()
+    return row and row[0] == filehash
+
+def update_cache(filepath, filehash):
+    conn = sqlite3.connect('.datatrust.db')
+    conn.execute("INSERT OR REPLACE INTO cache (filepath, filehash) VALUES (?, ?)", (filepath, filehash))
+    conn.commit()
+    conn.close()
+
+def save_to_db():
+    score, _ = calculate_security_score()
+    conn = sqlite3.connect('.datatrust.db')
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn.execute("INSERT INTO scans (timestamp, files, findings, high, score) VALUES (?, ?, ?, ?, ?)",
+                 (now, global_stats["files"], global_stats["findings"], global_stats["high"], score))
+    conn.commit()
+    conn.close()
+
+def show_stats():
+    conn = sqlite3.connect('.datatrust.db')
+    rows = conn.execute("SELECT timestamp, files, findings, high, score FROM scans ORDER BY id DESC LIMIT 10").fetchall()
+    conn.close()
+    table = Table(title="[bold white]Historical Stats[/bold white]", box=ROUNDED)
+    table.add_column("Time", style="#a29bfe")
+    table.add_column("Files")
+    table.add_column("Findings")
+    table.add_column("High Risk")
+    table.add_column("Score")
+    for r in rows:
+        table.add_row(r[0], str(r[1]), str(r[2]), str(r[3]), f"{r[4]}/100")
+    console.print(table)
+
+def load_config():
+    global config
+    if os.path.exists('datatrust.yml'):
+        try:
+            with open('datatrust.yml', 'r') as f:
+                config = yaml.safe_load(f) or {}
+        except Exception:
+            pass
 
 def load_ignore_patterns():
     patterns = set(DEFAULT_IGNORES)
-    if os.path.exists('.datatrustignore'):
-        with open('.datatrustignore', 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#'):
-                    patterns.add(line)
+    if 'ignore_paths' in config:
+        patterns.update(config['ignore_paths'])
     return patterns
 
-def display_result(text: str, source: str = "Input"):
-    global global_risk_found
-    result = scan_text(text)
-    if result["risk"] == "NONE": return False
-        
-    global_risk_found = True
-    console.print()
-    title = Text("🛑 WARNING: Sensitive Info Detected!", style="bold white on red")
-    console.print(Panel(title, expand=False, border_style="red"))
-    console.print(f"[dim]Source: {source}[/dim]\n")
-    
-    detected_types = set()
-    for item in result["findings"]:
-        detected_types.add(FRIENDLY_NAMES.get(item['type'], item['type']))
-        
-    for info in detected_types:
-        console.print(f"  [bold red]🔴 {info}[/bold red]")
-        
-    console.print("\n[yellow]⚠️  Please remove these details before sharing.[/yellow]")
-    console.print("=" * 50 + "\n")
-    return True
+def mask_secret(val: str) -> str:
+    return val[:3] + "•" * (len(val) - 6) + val[-3:] if len(val) > 6 else "••••"
 
-def save_to_env(secret_value: str, secret_type: str):
-    global env_counter
-    var_name = f"DATATRUST_{secret_type}_{env_counter}"
-    with open(".env", "a") as env_file:
-        env_file.write(f"{var_name}='{secret_value}'\n")
+def calculate_security_score():
+    remaining_high = len([f for f in all_findings if f['severity'] == 'HIGH' and not f.get('fixed')])
+    remaining_med = len([f for f in all_findings if f['severity'] == 'MEDIUM' and not f.get('fixed')])
+    score = max(0, 100 - (remaining_high * 10) - (remaining_med * 5))
     
-    if not os.path.exists(".gitignore"):
-        with open(".gitignore", "w") as gi:
-            gi.write(".env\n")
-    else:
-        with open(".gitignore", "r") as gi:
-            content = gi.read()
-        if ".env" not in content:
-            with open(".gitignore", "a") as gi:
-                gi.write("\n.env\n")
-                
-    env_counter += 1
-    return var_name
+    if score >= 90: grade = "[bold #55efc4]A[/bold #55efc4]"
+    elif score >= 80: grade = "[bold #81ecec]B[/bold #81ecec]"
+    elif score >= 70: grade = "[bold #fdcb6e]C[/bold #fdcb6e]"
+    else: grade = "[bold #ff7675]F[/bold #ff7675]"
+    return score, grade
 
-def process_file(filepath: str, fix_mode: bool = False):
-    global global_risk_found, global_stats
+def process_file_worker(args):
+    filepath, fix_mode, gh_mode, min_severity = args
+    findings = []
+    stats = {"files": 1, "findings": 0, "high": 0, "medium": 0, "fixed": 0}
+    
+    if not filepath.endswith(('.py', '.txt', '.env', '.json', '.js', '.md', '.yaml', '.yml', '.csv', '.sh', '.xml', '.html', '.toml', '.ini', '.cfg', 'Dockerfile', '.dockerfile')):
+        return filepath, findings, stats
+        
     try:
+        if filepath.endswith('.py'):
+            for af in scan_ast(filepath):
+                findings.append({"file": filepath, "line": af["line"], "type": FRIENDLY_NAMES.get(af["type"]), "severity": "HIGH", "value": af["value"], "fixed": False})
+                stats["findings"] += 1
+                stats["high"] += 1
+                if gh_mode: print(f"::error file={filepath},line={af['line']}::{af['type']}")
+        
+        if filepath.endswith(('Dockerfile', '.dockerfile')):
+            for df in scan_dockerfile(filepath):
+                findings.append({"file": filepath, "line": df["line"], "type": FRIENDLY_NAMES.get(df["type"]), "severity": "HIGH", "value": df["value"], "fixed": False})
+                stats["findings"] += 1
+                stats["high"] += 1
+                if gh_mode: print(f"::error file={filepath},line={df['line']}::{df['type']}")
+
+        if filepath.endswith(('.yaml', '.yml')):
+            for yf in scan_iac(filepath):
+                findings.append({"file": filepath, "line": yf["line"], "type": FRIENDLY_NAMES.get(yf["type"]), "severity": "HIGH", "value": yf["value"], "fixed": False})
+                stats["findings"] += 1
+                stats["high"] += 1
+                if gh_mode: print(f"::error file={filepath},line={yf['line']}::{yf['type']}")
+
         with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
             lines = f.readlines()
             
@@ -100,184 +207,279 @@ def process_file(filepath: str, fix_mode: bool = False):
                 
             result = scan_text(line, include_value=fix_mode)
             if result["risk"] in ["HIGH", "MEDIUM"]:
-                global_risk_found = True
-                global_stats["findings"] += len(result["findings"])
-                for item in result["findings"]:
-                    if item["severity"] == "HIGH": global_stats["high"] += 1
-                    if item["severity"] == "MEDIUM": global_stats["medium"] += 1
-                    all_findings.append({"file": filepath, "line": line_num, "type": FRIENDLY_NAMES.get(item['type'], item['type']), "severity": item["severity"]})
+                real_findings = [i for i in result["findings"] if not (i["type"] == "PROMPT_INJECTION" and 'r"' in line)]
                 
-                if not fix_mode:
-                    display_result(line, f"{filepath} (Line {line_num})")
-                else:
-                    for item in result["findings"]:
+                if not real_findings:
+                    new_lines.append(line)
+                    continue
+                    
+                for item in real_findings:
+                    if item["severity"] == "HIGH": stats["high"] += 1
+                    if item["severity"] == "MEDIUM": stats["medium"] += 1
+                    
+                    val_to_save = item.get("value", "")
+                    finding_entry = {"file": filepath, "line": line_num, "type": FRIENDLY_NAMES.get(item['type']), "severity": item["severity"], "value": val_to_save, "fixed": False}
+                    findings.append(finding_entry)
+                    stats["findings"] += 1
+                    if gh_mode: print(f"::error file={filepath},line={line_num}::{item['type']}")
+                
+                if fix_mode:
+                    for item in real_findings:
                         if "value" in item:
                             val = item["value"]
-                            secret_type = item['type']
-                            var_name = save_to_env(val, secret_type)
-                            if filepath.endswith('.py'):
-                                line = line.replace(val, f"os.getenv('{var_name}')")
-                            else:
-                                line = line.replace(val, f"${var_name}")
+                            var_name = f"DATATRUST_{item['type']}_{len(new_lines)}"
+                            with open(".env", "a") as env_file:
+                                env_file.write(f"{var_name}='{val}'\n")
+                            line = line.replace(val, f"os.getenv('{var_name}')" if filepath.endswith('.py') else f"${var_name}")
                             file_modified = True
+                            
+            for plugin in custom_plugins:
+                try:
+                    plugin_results = plugin.scan_line(line)
+                    if plugin_results:
+                        for pr in plugin_results:
+                            findings.append({"file": filepath, "line": line_num, "type": pr["type"], "severity": pr.get("severity", "HIGH"), "value": pr.get("value", ""), "fixed": False})
+                            stats["findings"] += 1
+                            stats["high"] += 1
+                except Exception:
+                    pass
+
+            if fix_mode and filepath.endswith(('Dockerfile', '.dockerfile')):
+                if re.match(r'(?i)^USER\s+root', line.strip()):
+                    line = re.sub(r'(?i)^USER\s+root', 'USER nonroot', line)
+                    file_modified = True
+                if re.match(r'(?i)^ADD\s+', line.strip()):
+                    line = re.sub(r'(?i)^ADD\s+', 'COPY ', line)
+                    file_modified = True
+
+            if fix_mode and filepath.endswith(('.yaml', '.yml')):
+                if 'privileged: true' in line:
+                    line = line.replace('privileged: true', 'privileged: false')
+                    file_modified = True
+                if 'allowPrivilegeEscalation: true' in line:
+                    line = line.replace('allowPrivilegeEscalation: true', 'allowPrivilegeEscalation: false')
+                    file_modified = True
+
             new_lines.append(line)
             
         if fix_mode and file_modified:
             with open(filepath, 'w', encoding='utf-8') as f:
                 f.writelines(new_lines)
-            console.print(f"[green]✔ Fixed secrets in: {filepath} (Moved to .env)[/green]")
-            
+            stats["fixed"] += 1
+            for f in findings:
+                f["fixed"] = True
+                
     except Exception:
         pass
+        
+    return filepath, findings, stats
 
-def scan_git_history():
-    console.print("[bold cyan]Scanning Git commit history for leaked secrets...[/bold cyan]")
-    try:
-        result = subprocess.run(["git", "log", "-p"], capture_output=True, text=True, errors="ignore")
-        lines = result.stdout.split('\n')
-        current_commit = "Unknown"
-        commit_msg = ""
-        
-        history_findings = []
-        
-        with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
-            task = progress.add_task("[cyan]Analyzing Git Diffs...", total=len(lines))
-            for line in lines:
-                if line.startswith('commit '):
-                    current_commit = line.split(' ')[1][:8]
-                elif line.startswith('    ') and not line.startswith('    ') is None:
-                    if len(line.strip()) > 5 and not commit_msg:
-                        commit_msg = line.strip()
-                elif line.startswith('+') and not line.startswith('+++'):
-                    if "tests/" in line or "patterns/" in line or "PATTERNS" in line:
-                        progress.advance(task)
-                        continue
-                        
-                    scan_result = scan_text(line[1:])
-                    if scan_result["risk"] in ["HIGH", "MEDIUM"]:
-                        for item in scan_result["findings"]:
-                            history_findings.append({
-                                "commit": current_commit,
-                                "msg": commit_msg[:30] + "..." if len(commit_msg) > 30 else commit_msg,
-                                "type": FRIENDLY_NAMES.get(item['type'], item['type']),
-                                "severity": item["severity"]
-                            })
-                progress.advance(task)
-                
-        if not history_findings:
-            console.print("[green]✅ No secrets found in Git history.[/green]")
-            return
+def scan_directory(directory: str, fix_mode: bool = False, gh_mode: bool = False):
+    global global_stats, all_findings, global_risk_found
+    all_findings = []
+    global_stats = {"files": 0, "findings": 0, "fixed": 0, "high": 0, "medium": 0}
+    global_risk_found = False
+    
+    ignores = load_ignore_patterns()
+    filepaths = []
+    
+    for root, dirs, files in os.walk(directory):
+        dirs[:] = [d for d in dirs if d not in ignores]
+        for file in files:
+            filepath = os.path.join(root, file)
+            if any(ignore in filepath for ignore in ignores):
+                continue
+            if file.endswith(('.py', '.txt', '.env', '.json', '.js', '.md', '.yaml', '.yml', '.csv', '.sh', '.xml', '.html', '.toml', '.ini', '.cfg', 'Dockerfile', '.dockerfile')):
+                filepaths.append(filepath)
+
+    files_to_scan = []
+    for f in filepaths:
+        fhash = get_file_hash(f)
+        if not is_cached(f, fhash) or fix_mode:
+            files_to_scan.append(f)
+
+    global_stats["files"] = len(files_to_scan)
+    if len(files_to_scan) == 0:
+        if not gh_mode: console.print("[yellow]No new or modified files to scan.[/yellow]")
+        return
+
+    tasks = [(f, fix_mode, gh_mode, 1) for f in files_to_scan]
+
+    if gh_mode:
+        for task in tasks:
+            _, findings, stats = process_file_worker(task)
+            all_findings.extend(findings)
+            for k in global_stats: global_stats[k] += stats[k]
+    else:
+        with Progress(SpinnerColumn(), TextColumn("[cyan]Scanning files in parallel..."), BarColumn(), TaskProgressColumn()) as progress:
+            task_bar = progress.add_task("", total=len(tasks))
+            with concurrent.futures.ProcessPoolExecutor() as executor:
+                for fpath, findings, stats in executor.map(process_file_worker, tasks):
+                    all_findings.extend(findings)
+                    for k in global_stats: global_stats[k] += stats[k]
+                    if not fix_mode:
+                        update_cache(fpath, get_file_hash(fpath))
+                    progress.advance(task_bar)
+                    
+    global_risk_found = any(not f["fixed"] for f in all_findings)
+
+def display_results_table():
+    if not all_findings: return
+    table = Table(title="[bold white]Security Findings[/bold white]", box=ROUNDED, border_style="dim cyan", show_lines=True)
+    table.add_column("File", style="#81ecec", width=20)
+    table.add_column("Line", justify="right", style="#fdcb6e", width=5)
+    table.add_column("Risk", style="bold", width=8)
+    table.add_column("Type & Detail", style="white")
+
+    unique = {f"{f['file']}-{f['line']}-{f['type']}": f for f in all_findings}.values()
+    for f in unique:
+        if f.get("fixed"):
+            status = "[green]FIXED[/green]"
+            risk_color = "green"
+            detail = f"✅ {f['type']} (Auto-fixed)"
+        else:
+            status = f["severity"]
+            risk_color = "bold #ff7675" if f["severity"] == "HIGH" else "bold #fdcb6e"
+            detail = f"🔴 {f['type']}"
             
-        table = Table(title="Git History Scan Results", show_lines=True)
-        table.add_column("Commit", style="yellow", width=10)
-        table.add_column("Leaked Data", style="red", width=25)
-        table.add_column("Risk", style="bold", width=8)
-        
-        unique_findings = {f"{f['commit']}-{f['type']}": f for f in history_findings}.values()
-        
-        for f in unique_findings:
-            risk_color = "red" if f["severity"] == "HIGH" else "yellow"
-            table.add_row(f["commit"], f["type"], f"[{risk_color}]{f['severity']}[/{risk_color}]")
+        if f.get("value") and not f.get("fixed"): 
+            detail += f"\n[dim #b2bec3]{mask_secret(str(f['value']))}[/dim #b2bec3]"
             
-        console.print("\n", table)
-        console.print("[bold red]⚠️  Note: These secrets are in your Git history. Rotate them immediately if they are real![/bold red]\n")
+        table.add_row(f["file"], str(f["line"]), f"[{risk_color}]{status}[/{risk_color}]", detail)
+    console.print("\n", table)
+
+def print_summary():
+    score, grade = calculate_security_score()
+    table = Table(title="[bold white]Scan Summary[/bold white]", box=ROUNDED)
+    table.add_column("Metric", style="#a29bfe")
+    table.add_column("Value", style="bold white")
+    table.add_row("Security Score", f"{score}/100 (Grade: {grade})")
+    table.add_row("Files Processed", str(global_stats["files"]))
+    table.add_row("Total Findings", str(global_stats["findings"]))
+    if global_stats["fixed"] > 0:
+        table.add_row("Auto-Fixed Files", f"[#55efc4]{global_stats['fixed']}[/#55efc4]")
         
-    except Exception as e:
-        console.print(f"[red]Error running git history scan: {e}[/red]")
+    remaining_high = len([f for f in all_findings if f['severity']=='HIGH' and not f['fixed']])
+    table.add_row("Remaining High Risk", f"[#ff7675]{remaining_high}[/#ff7675]")
+    console.print("\n", table)
 
 def generate_sarif_report():
-    if not all_findings: return
     sarif = {
         "version": "2.1.0",
         "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
         "runs": [{
-            "tool": {"driver": {"name": "DataTrust AI", "version": "0.6.0"}},
+            "tool": {"driver": {"name": "DataTrust AI", "informationUri": "https://github.com/warriorxxzz/datatrust-ai"}},
             "results": []
         }]
     }
     for f in all_findings:
+        if f.get("fixed"): continue
         sarif["runs"][0]["results"].append({
             "ruleId": f["type"].replace(" ", "_"),
-            "message": {"text": f"Sensitive data found: {f['type']}"},
+            "message": {"text": f"{f['type']} detected"},
             "level": "error" if f["severity"] == "HIGH" else "warning",
-            "locations": [{"physicalLocation": {"artifactLocation": {"uri": f["file"]}, "region": {"startLine": f["line"]}}}]
+            "locations": [{"physicalLocation": {"artifactLocation": {"uri": f["file"]}, "region": {"startLine": int(f["line"]) if str(f["line"]).isdigit() else 1}}}]
         })
     with open("datatrust.sarif", "w", encoding="utf-8") as file:
         json.dump(sarif, file, indent=2)
-    console.print("[bold cyan]📄 SARIF Report generated: datatrust.sarif[/bold cyan]")
-
-def scan_directory(directory: str, fix_mode: bool = False):
-    global global_stats
-    ignores = load_ignore_patterns()
-    filepaths = []
-    for root, dirs, files in os.walk(directory):
-        dirs[:] = [d for d in dirs if d not in ignores]
-        for file in files:
-            if file.endswith(('.py', '.txt', '.env', '.json', '.js', '.md', '.yaml', '.yml', '.csv')):
-                filepath = os.path.join(root, file)
-                if not any(ignore in filepath for ignore in ignores):
-                    filepaths.append(filepath)
-
-    global_stats["files"] = len(filepaths)
-    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), BarColumn(), TaskProgressColumn()) as progress:
-        task = progress.add_task("[cyan]Scanning files...", total=len(filepaths))
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-            for filepath in filepaths:
-                process_file(filepath, fix_mode)
-                progress.advance(task)
-
-def print_summary():
-    table = Table(title="Scan Summary")
-    table.add_column("Metric", style="cyan")
-    table.add_column("Value", style="bold white")
-    table.add_row("Files Scanned", str(global_stats["files"]))
-    table.add_row("Total Findings", str(global_stats["findings"]))
-    table.add_row("High Risk", f"[red]{global_stats['high']}[/red]")
-    table.add_row("Medium Risk", f"[yellow]{global_stats['medium']}[/yellow]")
-    console.print("\n", table)
+    console.print("[bold #81ecec]📄 SARIF report generated: datatrust.sarif[/bold #81ecec]")
 
 def main():
-    global global_risk_found, global_stats
-    parser = argparse.ArgumentParser(description="DataTrust AI - PII & Secret Scanner")
+    global global_risk_found, custom_plugins
+    init_db()
+    load_config()
+    custom_plugins = load_custom_plugins()
+    
+    if not any(arg in sys.argv for arg in ['--sca', '--gh-actions', '--license-check', '--stats', '--automate', '--serve', '--tutorial']):
+        console.print(BANNER)
+    
+    parser = argparse.ArgumentParser(description="DataTrust AI - Ultimate Enterprise Security Platform")
     parser.add_argument("text", nargs="?", help="Text to scan directly")
     parser.add_argument("--file", "-f", help="Scan a specific file")
     parser.add_argument("--dir", "-d", help="Scan an entire directory")
-    parser.add_argument("--git-history", action="store_true", help="Scan Git commit history")
-    parser.add_argument("--sarif", action="store_true", help="Output in SARIF format")
-    parser.add_argument("--fix", action="store_true", help="Move secrets to .env and replace in code")
-    parser.add_argument("--install-hook", action="store_true", help="Install Git pre-commit hook")
+    parser.add_argument("--fix", action="store_true", help="Auto-fix issues")
+    parser.add_argument("--serve", action="store_true", help="Start a local web server to view the report")
+    parser.add_argument("--json", action="store_true", help="Output in JSON format")
+    parser.add_argument("--sarif", action="store_true", help="Generate SARIF report for GitHub Advanced Security")
+    parser.add_argument("--report-md", action="store_true", help="Generate Markdown report for PR comments")
+    parser.add_argument("--stats", action="store_true", help="Show historical scan stats")
+    parser.add_argument("--automate", action="store_true", help="Setup Git hooks and GitHub Actions")
+    parser.add_argument("--gh-actions", action="store_true", help="Output in GitHub Actions format")
+    parser.add_argument("--tutorial", action="store_true", help="Show complete tutorial")
     args = parser.parse_args()
 
-    if args.install_hook:
-        hook_dir = ".git/hooks"
-        if os.path.exists(hook_dir):
-            hook_path = os.path.join(hook_dir, "pre-commit")
-            with open(hook_path, "w") as f:
-                f.write("#!/bin/sh\necho \"Running DataTrust AI scan...\"\ndatatrust --dir .\nif [ $? -ne 0 ]; then\n echo \"🛑 DataTrust AI blocked the commit!\"\n exit 1\nfi\n")
-            os.chmod(hook_path, 0o755)
-            console.print("[green]✅ Pre-commit hook installed successfully![/green]")
-        else:
-            console.print("[red]Error: .git directory not found.[/red]")
+    if args.tutorial:
+        show_tutorial()
         return
 
-    if args.git_history:
-        scan_git_history()
+    if args.automate:
+        hook_dir = ".git/hooks"
+        if os.path.exists(hook_dir):
+            with open(os.path.join(hook_dir, "pre-commit"), "w") as f:
+                f.write("#!/bin/sh\ndatatrust --staged\nif [ $? -ne 0 ]; then\n exit 1\nfi\n")
+            os.chmod(os.path.join(hook_dir, "pre-commit"), 0o755)
+        console.print("[bold #55efc4]✔ Automation setup complete.[/bold #55efc4]")
+        return
+
+    if args.stats: show_stats(); return
+    if args.serve: 
+        handler = partial(SimpleHTTPRequestHandler, directory=os.getcwd())
+        server = HTTPServer(('127.0.0.1', 8080), handler)
+        console.print(f"[bold #81ecec]🌐 Web Server at http://127.0.0.1:8080[/bold #81ecec]")
+        try: server.serve_forever()
+        except KeyboardInterrupt: pass
+        return
+
+    if not sys.stdin.isatty() and not args.text:
+        text = sys.stdin.read()
+        if text:
+            result = scan_text(text, include_value=True)
+            if result["risk"] != "NONE":
+                global_risk_found = True
+                for item in result["findings"]:
+                    all_findings.append({"file": "STDIN", "line": "-", "type": FRIENDLY_NAMES.get(item['type']), "severity": item["severity"], "value": item.get("value", ""), "fixed": False})
+                display_results_table()
+            else:
+                console.print("\n[bold #55efc4]✅ Safe.[/bold #55efc4]")
+            if global_risk_found: sys.exit(1)
+            return
+
+    if args.dir:
+        scan_directory(args.dir, args.fix, args.gh_actions)
+        if not args.gh_actions and not args.json:
+            print_summary()
+            display_results_table()
     elif args.file:
         global_stats["files"] = 1
-        process_file(args.file, args.fix)
-        print_summary()
-    elif args.dir:
-        scan_directory(args.dir, args.fix)
-        print_summary()
+        task = (args.file, args.fix, args.gh_actions, 1)
+        _, findings, stats = process_file_worker(task)
+        all_findings.extend(findings)
+        for k in global_stats: global_stats[k] += stats[k]
+        global_risk_found = any(not f["fixed"] for f in all_findings)
+        if not args.gh_actions and not args.json:
+            print_summary()
+            display_results_table()
     elif args.text:
-        display_result(args.text, "Direct Input")
+        result = scan_text(args.text, include_value=True)
+        if result["risk"] != "NONE":
+            global_risk_found = True
+            for item in result["findings"]:
+                all_findings.append({"file": "Input", "line": "-", "type": FRIENDLY_NAMES.get(item['type']), "severity": item["severity"], "value": item.get("value", ""), "fixed": False})
+            if not args.json: display_results_table()
+        else:
+            if not args.json: console.print("\n[bold #55efc4]✅ Safe.[/bold #55efc4]")
     else:
-        console.print("[yellow]Usage: datatrust \"text\" | -f file | -d dir | --git-history | --fix[/yellow]")
+        console.print("[#a29bfe]Usage: datatrust \"text\" | -d dir | cat file | datatrust[/#a29bfe]")
 
-    if args.sarif: generate_sarif_report()
-        
-    if global_risk_found: 
-        sys.exit(1)
+    if args.json:
+        print(json.dumps({"score": calculate_security_score()[0], "findings": all_findings}, indent=2))
+    elif args.sarif:
+        generate_sarif_report()
+    elif global_risk_found:
+        console.print("\n[bold #ff7675]❌ Unresolved security issues found.[/bold #ff7675]")
+
+    save_to_db()
+    if global_risk_found: sys.exit(1)
 
 if __name__ == "__main__":
     main()
