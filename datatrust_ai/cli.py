@@ -11,8 +11,9 @@ import yaml
 import xml.etree.ElementTree as ET
 import sqlite3
 import hashlib
+import fnmatch
 from datetime import datetime
-from http.server import SimpleHTTPRequestHandler, HTTPServer
+from http.server import os.getenv('DATATRUST_HIGH_ENTROPY_15'), HTTPServer
 from functools import partial
 from rich.console import Console
 from rich.panel import Panel
@@ -36,7 +37,7 @@ BANNER = r"""
  | |_| | (_| | || (_| | | || |  | |_| \__ \ |_ / ___ \ | |
  |____/ \__,_|\__\__,_| |_||_|   \__,_|___/\__/_/   \_\___|
 [/bold #a29bfe]
-[italic #81ecec]Ultimate Enterprise Security Platform | v2.4.0 Final[/italic #81ecec]
+[italic #81ecec]Ultimate Enterprise Security Platform | v2.4.1 Final[/italic #81ecec]
 """
 
 FRIENDLY_NAMES = {
@@ -59,7 +60,7 @@ FRIENDLY_NAMES = {
     "BASE64_AWS_KEY": "Base64 AWS Key", "BASE64_HIGH_ENTROPY": "Base64 Secret"
 }
 
-DEFAULT_IGNORES = ['.git', 'venv', 'env', '__pycache__', 'node_modules', 'dist', 'build', '.github', 'custom_rules.json', 'datatrust.sarif', '.egg-info', 'datatrust_ai', 'datatrust_report.html', 'datatrust.yml', '.datatrust.db', 'extension', 'tests', 'docs', 'datatrust_plugins']
+DEFAULT_IGNORES = ['.git', 'venv', 'env', '__pycache__', 'node_modules', 'dist', 'build', '.github', 'custom_rules.json', 'datatrust.sarif', '.egg-info', 'datatrust_report.html', 'datatrust.yml', '.datatrust.db', 'extension']
 global_stats = {"files": 0, "findings": 0, "fixed": 0, "high": 0, "medium": 0}
 all_findings = []
 global_risk_found = False
@@ -75,26 +76,26 @@ def show_help():
     table.add_column("Command", style="bold white", width=20)
     table.add_column("Description", style="white", width=35)
 
-    table.add_row("Scanning", "datatrust \"text\"", "Scan a raw string (e.g., check before pasting into AI).")
+    table.add_row("Scanning", "datatrust \"text\"", "Scan a raw string.")
     table.add_row("Scanning", "datatrust -f <file>", "Scan a specific file.")
     table.add_row("Scanning", "datatrust -d <dir>", "Scan an entire directory.")
-    table.add_row("Scanning", "datatrust --staged", "Scan only Git staged files (Fast).")
+    table.add_row("Scanning", "datatrust --staged", "Scan only Git staged files.")
     
     table.add_row("Remediation", "datatrust -d . --fix", "Auto-fix secrets, Docker, and K8s issues.")
-    table.add_row("Remediation", "datatrust -d . --fix --dry-run", "Simulate fixes without changing files.")
+    table.add_row("Remediation", "datatrust -d . --fix --dry-run", "Simulate fixes.")
     
     table.add_row("Automation", "datatrust --automate", "Setup Git pre-commit hooks & GitHub Actions.")
-    table.add_row("Automation", "datatrust --init", "Create a default datatrust.yml configuration.")
+    table.add_row("Automation", "datatrust --enable-plugins", "Enable custom plugins in datatrust_plugins.")
     
     table.add_row("CI/CD", "datatrust -d . --gh-actions", "Output errors in GitHub Actions format.")
-    table.add_row("CI/CD", "datatrust -d . --sarif", "Generate SARIF report for CodeQL/GitHub.")
-    table.add_row("CI/CD", "datatrust --sbom", "Generate CycloneDX SBOM (Supply Chain).")
-    table.add_row("CI/CD", "datatrust --json", "Output results in JSON format.")
+    table.add_row("CI/CD", "datatrust -d . --sarif", "Generate SARIF report.")
+    table.add_row("CI/CD", "datatrust --sbom", "Generate CycloneDX SBOM.")
+    table.add_row("CI/CD", "datatrust --sca", "Scan dependencies for vulnerabilities.")
+    table.add_row("CI/CD", "datatrust --license-check", "Check dependencies for restrictive licenses.")
+    table.add_row("CI/CD", "datatrust --report-md", "Generate Markdown report for PR comments.")
     
-    table.add_row("Utilities", "datatrust --serve", "Start a local web dashboard.")
+    table.add_row("Utilities", "datatrust --serve", "Start a secure local web dashboard.")
     table.add_row("Utilities", "datatrust --stats", "View historical scan stats.")
-    table.add_row("Utilities", "datatrust --license-check", "Check dependencies for restrictive licenses.")
-    table.add_row("Utilities", "datatrust --help", "Show this help menu.")
     
     console.print(table)
     console.print("\n[italic #81ecec]Tip: Add # datatrust:ignore at the end of any line to skip it.[/italic #81ecec]\n")
@@ -164,12 +165,12 @@ def interactive_menu():
             hook_dir = ".git/hooks"
             if os.path.exists(hook_dir):
                 with open(os.path.join(hook_dir, "pre-commit"), "w") as f:
-                    f.write("#!/bin/sh\necho \"🛡️ Running DataTrust AI Pre-commit Auto-Fix...\"\ndatatrust --staged --fix\ngit add -u\nexit 0\n")
+                    f.write("#!/bin/sh\necho \"🛡️ Running DataTrust AI Pre-commit...\"\ndatatrust --staged\nif [ $? -ne 0 ]; then\n echo \"🛑 Commit blocked! Sensitive info detected.\"\n exit 1\nfi\n")
                 os.chmod(os.path.join(hook_dir, "pre-commit"), 0o755)
-                console.print("[bold #55efc4]✔ Automation setup complete. Pre-commit hook will now auto-fix and allow commits.[/bold #55efc4]")
+                console.print("[bold #55efc4]✔ Automation setup complete.[/bold #55efc4]")
             else:
                 console.print("[bold #ff7675]Not a git repository. Cannot setup hooks.[/bold #ff7675]")
-            Prompt.ask("\n[dim]Press Enter to return to menu...[/dim]", default="")
+            Prompt.ask("\n[dim]Press Enter to return to menu...[/dim]")
         elif choice == "6":
             show_stats()
             Prompt.ask("\n[dim]Press Enter to return to menu...[/dim]", default="")
@@ -239,16 +240,23 @@ def load_config():
         except Exception:
             pass
 
-def init_config():
-    with open("datatrust.yml", "w") as f:
-        f.write("ignore_paths:\n  - tests/\nignore_types:\n  - EMAIL\n")
-    console.print("[bold #55efc4]✔ Created datatrust.yml[/bold #55efc4]")
-
 def load_ignore_patterns():
     patterns = set(DEFAULT_IGNORES)
     if 'ignore_paths' in config:
         patterns.update(config['ignore_paths'])
+    if os.path.exists('.datatrustignore'):
+        with open('.datatrustignore', 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    patterns.add(line)
     return patterns
+
+def is_ignored(filepath, patterns):
+    for p in patterns:
+        if fnmatch.fnmatch(filepath, f"*{p}*") or fnmatch.fnmatch(filepath, f"*/{p}/*") or filepath.startswith(p):
+            return True
+    return False
 
 def mask_secret(val: str) -> str:
     return val[:3] + "•" * (len(val) - 6) + val[-3:] if len(val) > 6 else "••••"
@@ -266,8 +274,9 @@ def calculate_security_score():
 
 def process_file_worker(args):
     filepath, fix_mode, gh_mode, min_severity, dry_run = args
+    ignores = load_ignore_patterns()
 
-    if any(ignore in filepath for ignore in DEFAULT_IGNORES):
+    if is_ignored(filepath, ignores):
         return filepath, [], {"files": 0, "findings": 0, "high": 0, "medium": 0, "fixed": 0}
 
     findings = []
@@ -312,6 +321,9 @@ def process_file_worker(args):
             result = scan_text(line, include_value=fix_mode)
             if result["risk"] in ["HIGH", "MEDIUM"]:
                 real_findings = [i for i in result["findings"] if not (i["type"] == "PROMPT_INJECTION" and 'r"' in line)]
+                
+                if 'ignore_types' in config:
+                    real_findings = [i for i in real_findings if i["type"] not in config['ignore_types']]
 
                 if not real_findings:
                     new_lines.append(line)
@@ -383,8 +395,8 @@ def process_file_worker(args):
             for f in findings:
                 f["fixed"] = True
 
-    except Exception:
-        pass
+    except Exception as e:
+        console.print(f"[red]Error scanning {filepath}: {e}[/red]")
 
     return filepath, findings, stats
 
@@ -403,7 +415,7 @@ def scan_staged_files(fix_mode: bool = False, gh_mode: bool = False, dry_run: bo
         for f in raw_files:
             f = f.strip()
             if f and os.path.exists(f):
-                if not any(ignore in f for ignore in ignores):
+                if not is_ignored(f, ignores):
                     filepaths.append(f)
     except Exception:
         return
@@ -440,10 +452,10 @@ def scan_directory(directory: str, fix_mode: bool = False, gh_mode: bool = False
     filepaths = []
 
     for root, dirs, files in os.walk(directory):
-        dirs[:] = [d for d in dirs if d not in ignores]
+        dirs[:] = [d for d in dirs if not is_ignored(d, ignores)]
         for file in files:
             filepath = os.path.join(root, file)
-            if any(ignore in filepath for ignore in ignores):
+            if is_ignored(filepath, ignores):
                 continue
             if file.endswith(('.py', '.txt', '.env', '.json', '.js', '.md', '.yaml', '.yml', '.csv', '.sh', '.xml', '.html', '.toml', '.ini', '.cfg', 'Dockerfile', '.dockerfile')):
                 filepaths.append(filepath)
@@ -573,11 +585,86 @@ def generate_sbom():
         json.dump(sbom, f, indent=2)
     console.print("[bold #81ecec]📄 CycloneDX SBOM generated: datatrust_sbom.json[/bold #81ecec]")
 
+def scan_dependencies():
+    console.print("[bold cyan]Scanning requirements.txt for vulnerabilities (OSV API)...[/bold cyan]")
+    if not os.path.exists("requirements.txt"):
+        console.print("[yellow]No requirements.txt found.[/yellow]")
+        return
+    with open("requirements.txt") as f:
+        lines = f.readlines()
+    table = Table(title="[bold white]Dependency Vulnerabilities[/bold white]", box=ROUNDED)
+    table.add_column("Package", style="cyan")
+    table.add_column("Vulnerability ID", style="yellow")
+    table.add_column("Fix", style="green")
+    found = False
+    for line in lines:
+        match = re.match(r"([a-zA-Z0-9_-]+)==([0-9.]+)", line.strip())
+        if match:
+            try:
+                res = requests.post("https://api.osv.dev/v1/query", json={"package": {"name": match.group(1), "ecosystem": "PyPI"}, "version": match.group(2)}, timeout=5)
+                if res.status_code == 200 and "vulns" in res.json():
+                    found = True
+                    for v in res.json()["vulns"]:
+                        fix = "No fix available"
+                        for aff in v.get("affected", []):
+                            for r in aff.get("ranges", []):
+                                for e in r.get("events", []):
+                                    if "fixed" in e: fix = f">= {e['fixed']}"
+                        table.add_row(f"{match.group(1)}=={match.group(2)}", v["id"], fix)
+            except Exception:
+                pass
+    if found: console.print(table)
+    else: console.print("[bold #55efc4]✅ No vulnerable dependencies found.[/bold #55efc4]")
+
+def check_licenses():
+    console.print("[bold cyan]Checking Open-Source Licenses for dependencies...[/bold cyan]")
+    if not os.path.exists("requirements.txt"):
+        console.print("[yellow]No requirements.txt found.[/yellow]")
+        return
+    with open("requirements.txt") as f:
+        lines = f.readlines()
+    table = Table(title="[bold white]Dependency Licenses[/bold white]", box=ROUNDED)
+    table.add_column("Package", style="cyan")
+    table.add_column("License", style="yellow")
+    table.add_column("Status", style="green")
+    bad = ['GPL', 'AGPL', 'SSPL']
+    for line in lines:
+        match = re.match(r"([a-zA-Z0-9_-]+)", line.strip())
+        if match:
+            try:
+                res = requests.get(f"https://pypi.org/pypi/{match.group(1)}/json", timeout=5)
+                lic = res.json()["info"].get("license", "Unknown") or "Unknown"
+                status = "[red]Restrictive[/red]" if any(b in lic.upper() for b in bad) else "[green]Safe[/green]"
+                table.add_row(match.group(1), lic[:30], status)
+            except Exception:
+                pass
+    console.print(table)
+
+def generate_markdown_report():
+    md = "# 🛡️ DataTrust AI Security Report\n\n"
+    score, grade = calculate_security_score()
+    md += f"**Security Score:** {score}/100 (Grade: {grade})\n\n"
+    if not all_findings:
+        md += "✅ No security issues found!\n"
+    else:
+        md += "## Findings\n\n| File | Line | Risk | Issue |\n|---|---|---|---|\n"
+        for f in all_findings:
+            if not f.get("fixed"):
+                md += f"| `{f['file']}` | {f['line']} | {f['severity']} | {f['type']} |\n"
+    with open("datatrust_report.md", "w", encoding="utf-8") as f:
+        f.write(md)
+    console.print("[bold #81ecec]📄 Markdown report generated: datatrust_report.md[/bold #81ecec]")
+
 def main():
     global global_risk_found, custom_plugins
     init_db()
     load_config()
-    custom_plugins = load_custom_plugins()
+    
+    if "--enable-plugins" in sys.argv:
+        custom_plugins = load_custom_plugins()
+        console.print("[bold #fdcb6e]⚠️ Custom plugins enabled.[/bold #fdcb6e]")
+    else:
+        custom_plugins = []
 
     if len(sys.argv) == 1:
         interactive_menu()
@@ -596,37 +683,56 @@ def main():
     parser.add_argument("--dir", "-d", help="Scan an entire directory")
     parser.add_argument("--staged", action="store_true", help="Scan only git staged files")
     parser.add_argument("--fix", action="store_true", help="Auto-fix issues")
-    parser.add_argument("--dry-run", action="store_true", help="Simulate fixes without writing to files")
-    parser.add_argument("--serve", action="store_true", help="Start a local web server to view the report")
-    parser.add_argument("--json", action="store_true", help="Output in JSON format")
-    parser.add_argument("--sarif", action="store_true", help="Generate SARIF report for GitHub Advanced Security")
-    parser.add_argument("--sbom", action="store_true", help="Generate CycloneDX Software Bill of Materials")
-    parser.add_argument("--report-md", action="store_true", help="Generate Markdown report for PR comments")
-    parser.add_argument("--stats", action="store_true", help="Show historical scan stats")
-    parser.add_argument("--automate", action="store_true", help="Setup Git hooks and GitHub Actions")
-    parser.add_argument("--gh-actions", action="store_true", help="Output in GitHub Actions format")
+    parser.add_argument("--dry-run", action="store_true", help="Simulate fixes")
+    parser.add_argument("--serve", action="store_true", help="Start secure server")
+    parser.add_argument("--json", action="store_true", help="Output in JSON")
+    parser.add_argument("--sarif", action="store_true", help="Generate SARIF report")
+    parser.add_argument("--sbom", action="store_true", help="Generate CycloneDX SBOM")
+    parser.add_argument("--report-md", action="store_true", help="Generate Markdown report")
+    parser.add_argument("--stats", action="store_true", help="Show historical stats")
+    parser.add_argument("--automate", action="store_true", help="Setup Git hooks")
+    parser.add_argument("--gh-actions", action="store_true", help="GitHub Actions format")
+    parser.add_argument("--sca", action="store_true", help="Scan dependencies")
+    parser.add_argument("--license-check", action="store_true", help="Check licenses")
+    parser.add_argument("--enable-plugins", action="store_true", help="Enable custom plugins")
     args = parser.parse_args()
 
     if args.sbom:
         generate_sbom()
         return
-
+    if args.sca:
+        scan_dependencies()
+        return
+    if args.license_check:
+        check_licenses()
+        return
     if args.automate:
         hook_dir = ".git/hooks"
         if os.path.exists(hook_dir):
             with open(os.path.join(hook_dir, "pre-commit"), "w") as f:
-                f.write("#!/bin/sh\necho \"🛡️ Running DataTrust AI Pre-commit Auto-Fix...\"\ndatatrust --staged --fix\ngit add -u\nexit 0\n")
+                f.write("#!/bin/sh\necho \"🛡️ Running DataTrust AI Pre-commit...\"\ndatatrust --staged\nif [ $? -ne 0 ]; then\n echo \"🛑 Commit blocked! Sensitive info detected.\"\n exit 1\nfi\n")
             os.chmod(os.path.join(hook_dir, "pre-commit"), 0o755)
-        console.print("[bold #55efc4]✔ Automation setup complete. Pre-commit hook will now auto-fix and allow commits.[/bold #55efc4]")
+        console.print("[bold #55efc4]✔ Automation setup complete.[/bold #55efc4]")
         return
-
-    if args.stats: show_stats(); return
+    if args.stats: 
+        show_stats()
+        return
     if args.serve:
-        handler = partial(SimpleHTTPRequestHandler, directory=os.getcwd())
-        server = HTTPServer(('127.0.0.1', 8080), handler)
-        console.print(f"[bold #81ecec]🌐 Web Server at http://127.0.0.1:8080[/bold #81ecec]")
-        try: server.serve_forever()
-        except KeyboardInterrupt: pass
+        import http.server
+        import socketserver
+        import os
+        
+        class SafeHandler(http.server.os.getenv('DATATRUST_HIGH_ENTROPY_724')):
+            def do_GET(self):
+                if self.path in ['/', '/datatrust_report.html']:
+                    self.path = '/datatrust_report.html'
+                    return http.server.os.getenv('DATATRUST_HIGH_ENTROPY_728').do_GET(self)
+                self.send_error(403, "Access Denied")
+                
+        console.print(f"[bold #81ecec]🌐 Secure Web Server at http://127.0.0.1:8080[/bold #81ecec]")
+        with socketserver.TCPServer(("127.0.0.1", 8080), SafeHandler) as httpd:
+            try: httpd.serve_forever()
+            except KeyboardInterrupt: pass
         return
 
     if not sys.stdin.isatty() and not args.text:
@@ -680,6 +786,8 @@ def main():
         print(json.dumps({"score": calculate_security_score()[0], "findings": all_findings}, indent=2))
     elif args.sarif:
         generate_sarif_report()
+    elif args.report_md:
+        generate_markdown_report()
     elif global_risk_found:
         console.print("\n[bold #ff7675]❌ Unresolved security issues found.[/bold #ff7675]")
 

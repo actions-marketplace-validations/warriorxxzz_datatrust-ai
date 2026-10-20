@@ -1,5 +1,5 @@
 const vscode = require('vscode');
-const { exec } = require('child_process');
+const { execFile } = require('child_process');
 
 function activate(context) {
     let disposable = vscode.commands.registerCommand('datatrust.scan', function () {
@@ -7,7 +7,7 @@ function activate(context) {
         if (!editor) return;
 
         const filepath = editor.document.uri.fsPath;
-        exec(`datatrust -f "${filepath}"`, (error, stdout, stderr) => {
+        execFile('datatrust', ['-f', filepath], (error, stdout, stderr) => {
             if (stdout) {
                 vscode.window.showInformationMessage('DataTrust Scan Complete');
                 const outputChannel = vscode.window.createOutputChannel("DataTrust AI");
@@ -23,9 +23,9 @@ function activate(context) {
     vscode.workspace.onDidSaveTextDocument((document) => {
         const filepath = document.uri.fsPath;
         if (filepath.endsWith('.py') || filepath.endsWith('.js') || filepath.endsWith('.env')) {
-            exec(`datatrust -f "${filepath}"`, (error, stdout, stderr) => {
+            execFile('datatrust', ['-f', filepath], (error, stdout, stderr) => {
                 if (error) {
-                    vscode.window.showWarningMessage('🛑 DataTrust: Sensitive info found in this file!');
+                    vscode.window.showWarningMessage('🛑 DataTrust: Sensitive info found!');
                 }
             });
         }
